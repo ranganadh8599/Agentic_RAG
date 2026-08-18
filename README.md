@@ -169,7 +169,7 @@ Everything is provider-agnostic: all LLM and embedding calls go through
 
 ```bash
 # 1. Install
-cd E:\Allgitprojects\agentic-rag
+cd \agentic-rag
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
@@ -218,15 +218,13 @@ Open **http://localhost:8000** in your browser. The built-in UI lets you:
 
 ## Screenshots
 
-![Agentic RAG chat interface](screenshots/main-chat.jpg)
+*Sign in or create an account to save, resume, and delete your chat history.*
+![Sign in / create account](screenshots/login.jpg)
 
 *The chat interface — ask questions and get grounded answers with live
 Markdown formatting, clickable `[n]` citations, and source cards, while the
 sidebar shows collections, your documents, and stats.*
-
-![Sign in / create account](screenshots/login.jpg)
-
-*Sign in or create an account to save, resume, and delete your chat history.*
+![Agentic RAG chat interface](screenshots/main-chat.jpg)
 
 ## Schema
 
