@@ -269,7 +269,7 @@ function displayName() {
   return "User";
 }
 
-/* ---------------- users & persisted chat history (LibreChat-style) -------- */
+/* ---------------- users & persisted chat history ------------------------- */
 
 let loginMode = "login"; // 'login' | 'register'
 
@@ -592,7 +592,6 @@ async function sendMessage() {
   try {
     const resp = await fetch("/v1/chat/completions", {
       method: "POST",
-      headers: authHeaders(),
       headers: authHeaders(),
       body: JSON.stringify({
         messages: [{ role: "user", content: text }],

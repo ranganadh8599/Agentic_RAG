@@ -1,8 +1,8 @@
 # Agentic RAG - hybrid retrieval.
-# Borrowed best ideas:
-#   * semantic cache with cosine threshold (LixSearch)
-#   * LLM query expansion + weighted reciprocal-rank fusion (Onyx)
-#   * asymmetric query/document prefixes (diary repo, when enabled)
+# Combines:
+#   * semantic cache with a cosine threshold
+#   * LLM query expansion + weighted reciprocal-rank fusion
+#   * asymmetric query/document prefixes (when enabled)
 #   * vector (pgvector) + keyword (Postgres full-text) hybrid search
 
 import re
@@ -21,8 +21,8 @@ from prompts import EXPANSION_PROMPT
 
 @lru_cache(maxsize=settings.QUERY_EMBED_CACHE_SIZE)
 def embed_query(query: str):
-    """Embed a query, cached (LibreChat rag_api pattern) so repeated or
-    similar queries never re-embed the same text."""
+    """Embed a query, cached so repeated or similar queries never re-embed
+    the same text."""
     text = query
     if settings.USE_ASYMMETRIC_PREFIX:
         text = settings.QUERY_PREFIX + text
@@ -30,7 +30,7 @@ def embed_query(query: str):
 
 
 # ---------------------------------------------------------------------------
-# Semantic cache (LixSearch pattern, stored in Postgres instead of Redis)
+# Semantic cache (stored in Postgres instead of Redis)
 # ---------------------------------------------------------------------------
 
 def semantic_cache_lookup(query_emb, collection_id: int | None = None):
@@ -90,7 +90,7 @@ def vector_search(query_emb, top_k: int, collection_id: int | None = None):
             )
             rows = cur.fetchall()
         results = [(float(r["score"] or 0.0), r) for r in rows]
-        # LibreChat-style relevance threshold: drop weak matches below the floor.
+        # Relevance threshold: drop weak matches below the floor.
         return [(s, r) for s, r in results if s >= settings.RELEVANCE_FLOOR]
 
     # JSONB fallback: fetch all embeddings, score in Python.
@@ -149,7 +149,7 @@ def keyword_search(query: str, top_k: int, collection_id: int | None = None):
 # ---------------------------------------------------------------------------
 
 def expand_query(query: str) -> list[str]:
-    """LLM query expansion: rephrase + extra keyword queries (Onyx pattern)."""
+    """LLM query expansion: rephrase + extra keyword queries."""
     try:
         text = chat_text(
             [{"role": "system", "content": EXPANSION_PROMPT},

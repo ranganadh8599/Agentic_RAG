@@ -103,9 +103,9 @@ Everything is provider-agnostic: all LLM and embedding calls go through
 ### 🔎 Retrieval & memory
 
 - **Hybrid retrieval** — vector search + Postgres full-text keyword search,
-  **LLM query expansion**, and **reciprocal-rank fusion** (borrowed from Onyx).
+  **LLM query expansion**, and **reciprocal-rank fusion**.
 - **Semantic cache** — repeated queries answered instantly when a semantically
-  similar cached answer exists (cosine ≥ 0.90, borrowed from LixSearch).
+  similar cached answer exists (cosine ≥ 0.90).
 - **Conversation memory** — "recent + relevant" context injection per chat.
 - **Greeting short-circuit** — pure greetings (hi/hello/hey/what's up/good
   morning…) are detected instantly and answered directly from the LLM, **skipping
@@ -155,7 +155,7 @@ Everything is provider-agnostic: all LLM and embedding calls go through
 
 ### 👤 Users & UX
 
-- **Users & persisted chat history (LibreChat-style, in MongoDB)** — accounts
+- **Users & persisted chat history (in MongoDB)** — accounts
   and every conversation/message are stored in **MongoDB** (`users`, `sessions`,
   `conversations`, `messages` collections) with a **real username + password
   login** (PBKDF2-hashed passwords, no OAuth). Each conversation is stored
@@ -237,7 +237,7 @@ sidebar shows collections, your documents, and stats.*
 | `chunks` | chunked content with embeddings (vector or jsonb), `collection_id` |
 | `semantic_cache` | query→answer cache with embeddings (cosine threshold), `collection_id` |
 
-**MongoDB (users & chat history, LibreChat-style):**
+**MongoDB (users & chat history):**
 
 | Collection | Purpose |
 |-------|---------|
@@ -303,10 +303,9 @@ live per-file progress. The UI reads these from `GET /api/config`.
 > This prevents the model from misreading fragmented content (e.g. mistaking
 > education dates for employment).
 >
-> **Chunking defaults (LibreChat-proven):** `CHUNK_SIZE=1500`, `CHUNK_OVERLAP=100`
-> — adopted from LibreChat's `rag_api` (danny-avila), which validated these in
-> production. Also adopted from it: a **query-embedding cache** (repeated queries
-> never re-embed) and a **relevance floor** on vector results.
+> **Chunking defaults:** `CHUNK_SIZE=1500`, `CHUNK_OVERLAP=100`. Includes a
+> **query-embedding cache** (repeated queries never re-embed) and a **relevance
+> floor** on vector results.
 
 > **Asymmetric prefixes**: enable `USE_ASYMMETRIC_PREFIX=1` only for local
 > sentence-transformers embeddings (bge / nomic / all-MiniLM). Leave OFF for

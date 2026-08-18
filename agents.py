@@ -1,6 +1,5 @@
 # Agentic RAG - multi-agent orchestration.
-# A small hand-rolled agent system (inspired by camel/owl/OpenManus patterns
-# and Onyx's grounded-answer design):
+# A small hand-rolled agent system:
 #   RouterAgent    -> classify the query (rag | summary | vision | general)
 #   RetrieverAgent -> hybrid retrieval (+ query expansion)
 #   WriterAgent    -> grounded answer with [n] citations
@@ -273,7 +272,7 @@ class OrchestratorAgent:
 
     def _persist_user(self, conversation_id, query, q_emb):
         """Save the user's message immediately so it is never lost if the turn is
-        interrupted (LibreChat-style persistence)."""
+        interrupted."""
         if conversation_id:
             memory.add_message(conversation_id, "user", query, embedding=q_emb)
 

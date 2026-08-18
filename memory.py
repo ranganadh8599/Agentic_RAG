@@ -1,7 +1,7 @@
 # Agentic RAG - conversation memory.
-# "Recent + relevant" memory backed by MongoDB (LibreChat-style). Conversations
-# and messages live in MongoDB; this module re-exports the same API the agents
-# and API layer already use, so nothing downstream needs to change.
+# "Recent + relevant" memory backed by MongoDB. Conversations and messages
+# live in MongoDB; this module re-exports the same API the agents and API layer
+# already use, so nothing downstream needs to change.
 
 from mongo import (
     create_conversation,

@@ -39,7 +39,7 @@ class Settings:
     TEMPERATURE: float = float(os.getenv("TEMPERATURE", "0.2"))
     MAX_TOKENS: int = int(os.getenv("MAX_TOKENS", "1024"))
 
-    # --- Chunking (LibreChat-proven defaults: 1500/100) ---
+    # --- Chunking (defaults: 1500/100) ---
     CHUNK_SIZE: int = int(os.getenv("CHUNK_SIZE", "1500"))
     CHUNK_OVERLAP: int = int(os.getenv("CHUNK_OVERLAP", "100"))
 
@@ -49,7 +49,7 @@ class Settings:
     STRUCTURED_CHUNK_OVERLAP: int = int(os.getenv("STRUCTURED_CHUNK_OVERLAP", "200"))
     STRUCTURED_MAX_CHARS: int = int(os.getenv("STRUCTURED_MAX_CHARS", "5000"))
 
-    # --- Retrieval (borrowed from Onyx + LixSearch) ---
+    # --- Retrieval ---
     TOP_K: int = int(os.getenv("TOP_K", "6"))
     RELEVANCE_FLOOR: float = float(os.getenv("RELEVANCE_FLOOR", "0.25"))
     RRF_K: int = int(os.getenv("RRF_K", "60"))          # reciprocal-rank fusion constant
@@ -114,7 +114,7 @@ class Settings:
     # (HNSW cap 4000) so fast indexing still works.
     HNSW_VECTOR_DIM_LIMIT: int = int(os.getenv("HNSW_VECTOR_DIM_LIMIT", "2000"))
 
-    # --- MongoDB (users, sessions & chat history — LibreChat-style) ---
+    # --- MongoDB (users, sessions & chat history) ---
     # RAG data (documents/chunks/collections/cache) stays in PostgreSQL/pgvector.
     MONGO_URI: str = os.getenv("MONGO_URI", "mongodb://127.0.0.1:27017")
     MONGO_DB: str = os.getenv("MONGO_DB", "agentic_rag")

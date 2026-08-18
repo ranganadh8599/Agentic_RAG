@@ -1,5 +1,5 @@
 # Agentic RAG - ingestion pipeline: load -> chunk -> embed -> store in Postgres.
-# Uses asymmetric document prefixes when enabled (borrowed from the diary repo).
+# Uses asymmetric document prefixes when enabled.
 
 import os
 import re

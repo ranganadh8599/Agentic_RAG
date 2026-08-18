@@ -1,8 +1,7 @@
 # Agentic RAG - text chunking.
-# Recursive character splitter with CJK-safe separators (borrowed from the
-# Multilingual-Personal-Diary-AI-System repo's splitter design: the separator
-# list deliberately avoids splitting inside words and keeps mixed CJK text
-# intact), plus a small overlap so chunk boundaries don't lose context.
+# Recursive character splitter with CJK-safe separators: the separator list
+# deliberately avoids splitting inside words and keeps mixed CJK text intact,
+# plus a small overlap so chunk boundaries don't lose context.
 
 from config import settings
 

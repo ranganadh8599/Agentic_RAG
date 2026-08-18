@@ -1,7 +1,7 @@
 # Agentic RAG - document loaders.
 # PDF: extracts text per page AND summarizes embedded images with a vision LLM
-#      (borrowed from Onyx's file_processing: pypdf text + page.images with an
-#      OOM guard, plus vision summarization stored as sections).
+#      (pypdf text + page.images with an OOM guard, plus vision summarization
+#      stored as sections).
 # Images: vision-LLM extraction/description (works with any vision model).
 # Text/Markdown: direct read.
 

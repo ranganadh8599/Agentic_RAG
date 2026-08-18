@@ -1,7 +1,6 @@
 # Agentic RAG - unified multi-provider LLM + embeddings via LiteLLM.
-# One interface for OpenAI, Gemini, Claude, Ollama, Cohere, etc.
-# (The routing idea is borrowed from the Portkey gateway repo: a single
-#  OpenAI-style interface in front of many providers.)
+# A single OpenAI-style interface in front of many providers
+# (OpenAI, Gemini, Claude, Ollama, Cohere, etc.).
 #
 # "mock" models are supported for offline testing with no API keys.
 

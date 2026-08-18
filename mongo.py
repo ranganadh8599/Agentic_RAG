@@ -1,6 +1,6 @@
 # Agentic RAG - MongoDB persistence for users, sessions & chat history.
-# (LibreChat-style: conversations & messages live in MongoDB; the RAG vector
-# store — documents/chunks/collections/semantic cache — stays in Postgres.)
+# Conversations & messages live in MongoDB; the RAG vector store —
+# documents/chunks/collections/semantic cache — stays in Postgres.
 #
 # Login is real but basic: username + password, PBKDF2-hashed, with an opaque
 # bearer session token. All chat/user/history operations are defensive: if
