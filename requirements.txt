@@ -1,0 +1,25 @@
+# Agentic RAG - dependencies
+# Install with:  pip install -r requirements.txt
+
+# Multi-provider LLM + embeddings (OpenAI / Gemini / Claude / Ollama / ...)
+litellm>=1.40
+google-generativeai>=0.7
+
+# API server
+fastapi>=0.110
+uvicorn[standard]>=0.29
+python-multipart>=0.0.9
+
+# PostgreSQL driver + vectors
+psycopg[binary]>=3.1
+
+# Document loading
+pypdf>=4.0
+pillow>=10.0
+python-docx>=1.1
+openpyxl>=3.1
+python-pptx>=0.6.23
+
+# Utilities
+python-dotenv>=1.0
+numpy>=1.26

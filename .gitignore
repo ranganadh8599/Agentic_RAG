@@ -1,0 +1,97 @@
+# ------------------------------------------------------------------
+# Secrets & environment — never commit real credentials
+# ------------------------------------------------------------------
+.env
+.env.local
+.env.*.local
+.env.*
+!.env.example
+
+# ------------------------------------------------------------------
+# Python
+# ------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+pip-wheel-metadata/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# ------------------------------------------------------------------
+# Testing / linting / coverage caches
+# ------------------------------------------------------------------
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pyre/
+.pytype/
+.hypothesis/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# ------------------------------------------------------------------
+# Logs & runtime data
+# ------------------------------------------------------------------
+*.log
+logs/
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# ------------------------------------------------------------------
+# Test fixtures (generated sample data — not for VCS)
+# ------------------------------------------------------------------
+fixtures/
+
+# ------------------------------------------------------------------
+# IDE / editor
+# ------------------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.code-workspace
+
+# ------------------------------------------------------------------
+# OS
+# ------------------------------------------------------------------
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# ------------------------------------------------------------------
+# Misc temporary / local-only
+# ------------------------------------------------------------------
+.ipynb_checkpoints/
+uploads/
+tmp/
+temp/
+*.tmp

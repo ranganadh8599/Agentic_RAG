@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Agentic RAG</title>
+  <link rel="stylesheet" href="/static/style.css?v=25" />
+</head>
+<body>
+  <div class="app">
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="logo">◆</div>
+        <div>
+          <h1>Agentic RAG</h1>
+          <p>multi-agent &bull; pgvector &bull; gemini</p>
+        </div>
+      </div>
+
+      <div class="user-chip" id="userChip" title="Account">
+        <div class="user-avatar" id="userAvatar">U</div>
+        <div class="user-meta">
+          <div class="user-name" id="userName">User</div>
+          <div class="user-sub" id="userSub">Account</div>
+        </div>
+      </div>
+
+      <div class="profile-menu hidden" id="profileMenu">
+        <div class="profile-header">
+          <span class="profile-name" id="profileName">User</span>
+          <span class="profile-username" id="profileUsername"></span>
+        </div>
+        <button class="profile-item" id="profileResetBtn" type="button">🔑 Reset password</button>
+        <div class="profile-password hidden" id="profilePassword">
+          <input type="password" id="pwCurrent" placeholder="Current password" autocomplete="current-password" />
+          <input type="password" id="pwNew" placeholder="New password" autocomplete="new-password" />
+          <div class="profile-note" id="pwNote"></div>
+          <div class="profile-actions">
+            <button class="btn ghost" id="pwCancelBtn" type="button">Cancel</button>
+            <button class="btn primary" id="pwUpdateBtn" type="button">Update</button>
+          </div>
+        </div>
+        <div class="profile-sep"></div>
+        <button class="profile-item danger" id="profileLogoutBtn" type="button">↪ Logout</button>
+      </div>
+
+      <details class="howto" open>
+        <summary>❓ How to use</summary>
+        <ol class="howto-list">
+          <li><b>Choose where to search</b> — pick a table in <i>Search in table</i>, or leave it on <i>All collections</i>.</li>
+          <li><b>Upload documents</b> — drag files into <i>Drop documents</i> or click <i>browse files</i>. Type a name in <i>Upload to table</i> to create a new table automatically.</li>
+          <li><b>Ask questions</b> — type below and press <kbd>Enter</kbd>. Click any <code>[n]</code> citation in the answer to jump to its source.</li>
+          <li><b>Documents &amp; Stats</b> — show the files and chunk counts for the selected table only.</li>
+        </ol>
+      </details>
+
+      <button id="newChatBtn" class="btn primary" title="Start a fresh conversation (previous chats are preserved)">＋ New chat</button>
+
+      <div class="section-title">History
+        <span class="info" tabindex="0" role="tooltip">ⓘ
+          <span class="info-pop">Your saved conversations. Click one to resume it — each chat is stored under your account, so other users can't see it.</span>
+        </span>
+      </div>
+      <div id="historyList" class="history-list"></div>
+
+      <div class="collection-box">
+        <label for="collectionSelect">Search in table
+          <span class="info" tabindex="0" role="tooltip">ⓘ
+            <span class="info-pop">The dropdown chooses which <b>table (collection)</b> to search.
+            <b>All collections</b> searches every table. Answers, sources and the document list come only from the selected table, so different datasets (resume, hr, finance…) never mix.</span>
+          </span>
+        </label>
+        <select id="collectionSelect">
+          <option value="">All collections</option>
+        </select>
+      </div>
+
+      <div class="dropzone" id="dropzone">
+        <div class="dz-icon">
+          <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+            <polyline points="17 8 12 3 7 8"/>
+            <line x1="12" y1="3" x2="12" y2="15"/>
+          </svg>
+        </div>
+        <p class="dz-title">Drop documents
+          <span class="info" tabindex="0" role="tooltip">ⓘ
+            <span class="info-pop">Drag &amp; drop files here or click <b>browse files</b> to ingest them.
+            Supported: PDF, images (PNG/JPG/JPEG/GIF/WEBP/BMP), text / Markdown / CSV / JSON, Word (.docx), Excel (.xlsx), PowerPoint (.pptx).
+            The text is extracted, chunked, embedded and stored in PostgreSQL automatically.</span>
+          </span>
+        </p>
+        <p class="dz-hint">PDF, images, text, Office &mdash; auto-ingested</p>
+        <div class="upload-col">
+          <label for="uploadCollection">Upload to table
+            <span class="info" tabindex="0" role="tooltip">ⓘ
+              <span class="info-pop">Choose where files are stored. Pick an <b>existing</b> table to add files to it,
+              or type a <b>new</b> name to create a new table automatically on the first upload.
+              Duplicate files in the same table are skipped automatically.</span>
+            </span>
+          </label>
+          <input id="uploadCollection" value="default" placeholder="table name" />
+          <p class="dz-note">💡 New name = creates a new table automatically</p>
+        </div>
+        <label class="dz-link" for="fileInput">or browse files
+          <input type="file" id="fileInput" accept=".pdf,.png,.jpg,.jpeg,.gif,.webp,.bmp,.txt,.md,.csv,.json,.docx,.xlsx,.pptx" multiple hidden />
+        </label>
+      </div>
+
+      <div class="section-title">Documents
+        <span class="info" tabindex="0" role="tooltip">ⓘ
+          <span class="info-pop">All documents in the <b>currently selected table</b>. Switch the
+          <i>Search in table</i> dropdown above to view a different table's documents. Chunks are the text pieces that get searched.</span>
+        </span>
+      </div>
+      <ul id="docList" class="doc-list"></ul>
+
+      <div class="section-title">Stats
+        <span class="info" tabindex="0" role="tooltip">ⓘ
+          <span class="info-pop">Totals for the selected table: number of <b>documents</b> and indexed <b>chunks</b> (searchable text pieces).</span>
+        </span>
+      </div>
+      <div id="stats" class="stats"></div>
+    </aside>
+
+    <!-- Main chat -->
+    <main class="main">
+      <div id="messages" class="messages"></div>
+
+      <div class="composer-wrap">
+        <div class="composer">
+          <textarea id="input" rows="1" placeholder="Ask about your documents…  (Enter to send, Shift+Enter for new line)"></textarea>
+          <button id="sendBtn" class="btn send" title="Send">➤</button>
+        </div>
+        <div class="composer-hint">
+          Answers are grounded in your documents with <code>[n]</code> citations.
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <!-- Upload notification banner (top of the chat window): live progress while
+       uploading, then a success/uploaded message once it finishes. -->
+  <div id="uploadProgress" class="upload-progress hidden">
+    <div class="upload-spinner" aria-label="Uploading"></div>
+    <div class="upload-progress-body">
+      <div class="upload-progress-file" id="upFile">uploading…</div>
+      <div class="upload-progress-phase" id="upPhase">Starting…</div>
+      <div class="upload-progress-bar"><div class="upload-progress-fill" id="upFill"></div></div>
+    </div>
+  </div>
+
+  <!-- Login modal -->
+  <div id="loginModal" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-logo">◆</div>
+      <h2 id="loginTitle">Welcome back 👋</h2>
+      <p class="modal-sub" id="loginSub">Sign in to your account — your chats are saved here.</p>
+      <input id="loginName" placeholder="Username" autocomplete="username" maxlength="40" />
+      <input id="loginPass" type="password" placeholder="Password" autocomplete="current-password" />
+      <button id="loginBtn" class="btn primary">Sign in</button>
+      <button id="loginToggle" class="modal-toggle">New here? Create an account</button>
+      <p class="modal-note" id="loginNote"></p>
+    </div>
+  </div>
+
+  <!-- marked: renders Markdown in assistant answers (headings, bold, tables, code, ...).
+       Falls back to a small built-in renderer if the CDN is unreachable. -->
+  <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
+  <script src="/static/app.js?v=25"></script>
+</body>
+</html>
