@@ -2,8 +2,8 @@
 
 from fastapi import APIRouter
 
-import db
-import mongo
+import app.database.mongo as mongo
+import app.database.postgres as db
 from app.api.dependencies import count_rows
 from app.core.config import settings
 

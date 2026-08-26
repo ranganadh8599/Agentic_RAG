@@ -19,8 +19,8 @@ from app.api import (routes_auth, routes_chat, routes_collections,
                      routes_conversations, routes_documents, routes_health)
 from app.core.config import settings
 from app.core.logging import setup_logging
-import db
-import mongo
+import app.database.mongo as mongo
+import app.database.postgres as db
 
 log = logging.getLogger("main")
 

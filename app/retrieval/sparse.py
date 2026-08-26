@@ -18,7 +18,7 @@ from collections import Counter
 from app.core.config import settings
 from app.retrieval.filters import filter_where as build_filter_where
 from app.retrieval.filters import is_post_filter, passes_filter
-import db
+import app.database.postgres as db
 
 log = logging.getLogger(__name__)
 

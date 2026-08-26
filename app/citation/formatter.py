@@ -6,7 +6,7 @@
 # Also attaches a stored page image when the cited chunk points at a page
 # with one.
 
-import db
+import app.database.postgres as db
 from app.citation.sanitizer import significant_words
 from app.core.config import settings
 

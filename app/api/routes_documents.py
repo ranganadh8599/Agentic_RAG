@@ -8,9 +8,9 @@ from threading import Lock
 from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import Response
 
-import db
-import ingest
-import mongo
+import app.database.mongo as mongo
+import app.database.postgres as db
+import app.ingestion.pipeline as ingest
 from app.api.dependencies import bearer_token, page_params
 from app.core.config import settings
 

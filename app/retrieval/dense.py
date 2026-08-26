@@ -7,11 +7,11 @@
 import logging
 from functools import lru_cache
 
-import db
+import app.database.postgres as db
 from app.core.config import settings
+from app.llm.embeddings import embed_texts
 from app.retrieval.filters import filter_where as build_filter_where
 from app.retrieval.filters import is_post_filter, passes_filter
-from llm import embed_texts
 
 log = logging.getLogger("retrieval")
 

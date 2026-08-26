@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, HTTPException, Request
 
-import mongo
+import app.database.mongo as mongo
 from app.api.dependencies import (auth_rate_clear, auth_rate_limit, bearer_token,
                                   require_user)
 from app.schemas.users import ChangePasswordRequest, LoginRequest, RegisterRequest

@@ -130,7 +130,7 @@ Everything is provider-agnostic: all LLM and embedding calls go through
   `rerank_confidence` in [0,1]. `USE_RERANKER=0` disables the rerank stage.
 - **BM25-style sparse search** — exact-term retrieval that catches names, codes
   and acronyms embeddings miss (`SPARSE_DIM`, `SPARSE_TOP_TERMS`); auto-enabled
-  on pgvector ≥ 0.7 (`USE_SPARSE_SEARCH`, rebuild with `cli.py rebuild-sparse`).
+  on pgvector ≥ 0.7 (`USE_SPARSE_SEARCH`, rebuild with `cli/main.py rebuild-sparse`).
 - **Retrieval-results cache** — popular queries reuse their cached reranked
   chunk list, skipping search + rerank entirely (`RETRIEVAL_CACHE_ENABLED`,
   `RETRIEVAL_CACHE_THRESHOLD` 0.97, `RETRIEVAL_CACHE_MAX_ENTRIES` 500).
@@ -145,7 +145,7 @@ Everything is provider-agnostic: all LLM and embedding calls go through
   bucket **plus the global (admin) cache** but **writes only to their own**. The
   global bucket never stores results that touch a private document, so a user
   reading the admin cache can never leak another user's files. Grant admin with
-  `cli.py admin <username>` (revoke with `--remove`).
+  `cli/main.py admin <username>` (revoke with `--remove`).
 - **Hybrid retrieval** — vector search + Postgres full-text keyword search,
   **LLM query expansion**, and **reciprocal-rank fusion**.
 - **Semantic cache** — repeated queries answered instantly when a semantically
@@ -254,21 +254,21 @@ pip install -r requirements.txt
 #      OPENAI_API_KEY=sk-...
 
 # 3. Ingest documents
-python cli.py ingest C:\path\to\a.pdf
-python cli.py ingest C:\path\to\folder_of_docs     # whole directory
-python cli.py ingest C:\path\to\a.pdf --collection hr   # into the 'hr' table
+python cli/main.py ingest C:\path\to\a.pdf
+python cli/main.py ingest C:\path\to\folder_of_docs     # whole directory
+python cli/main.py ingest C:\path\to\a.pdf --collection hr   # into the 'hr' table
 
 # 4. Ask questions
-python cli.py ask "What is the revenue mentioned in the report?"
-python cli.py ask "..." --collection hr                  # search only the 'hr' table
-python cli.py chat                                        # interactive chat
+python cli/main.py ask "What is the revenue mentioned in the report?"
+python cli/main.py ask "..." --collection hr                  # search only the 'hr' table
+python cli/main.py chat                                        # interactive chat
 
 # 5. Roles — how a user becomes admin
 #    Admin:        sees the shared corpus (admin/CLI uploads), global cache.
 #    Normal user:  sees the shared corpus + their own uploads, own cache.
 #    New users are normal by default; promote/revoke with:
-python cli.py admin alice                    # grant admin to alice
-python cli.py admin alice --remove           # revoke admin from alice
+python cli/main.py admin alice                    # grant admin to alice
+python cli/main.py admin alice --remove           # revoke admin from alice
 
 # 6. Start MongoDB (users + chat history)
 #    Portable install: extract https://fastdl.mongodb.org/windows/mongodb-windows-x86_64-8.3.8.zip to C:\mongodb
@@ -329,8 +329,8 @@ Volumes keep your data: `pgdata` (Postgres), `mongodata` (Mongo), `hf-cache`
 
 ### CLI inside the container
 ```bash
-docker compose exec app python cli.py admin alice                 # promote a user
-docker compose exec app python cli.py ingest /app/fixtures/notes.txt
+docker compose exec app python cli/main.py admin alice                 # promote a user
+docker compose exec app python cli/main.py ingest /app/fixtures/notes.txt
 ```
 
 ## Web UI
@@ -494,7 +494,7 @@ agentic-rag/
 │   ├── citation/     # validator / sanitizer / formatter
 │   ├── core/         # config, logging, exceptions
 │   └── schemas/      # chat / users request models
-├── cli.py         # ingest / ask / chat / stats / admin / reset
+├── cli/main.py    # ingest / ask / chat / stats / admin / reset
 ├── db.py          # Postgres + pgvector schema and vector helpers
 ├── mongo.py       # MongoDB users, sessions, conversations, messages
 ├── llm.py         # unified multi-provider LLM + embeddings (with mock)

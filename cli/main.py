@@ -5,13 +5,21 @@
 #   chat [--conv N]                interactive chat with the agents
 #   stats                          show collection stats
 #   reset                          drop all data (re-init schema)
+#
+# Run from the repo root:  python cli/main.py <command> ...
 
-import argparse
+import os
 import sys
 
-import db
-import ingest
-import memory
+# Allow `python cli/main.py` from anywhere: the project is not pip-installed,
+# so add the repo root (parent of cli/) to sys.path to make `app` importable.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import argparse
+
+import app.database.postgres as db
+import app.ingestion.pipeline as ingest
+import app.memory.conversation as memory
 from app.agents.orchestrator import OrchestratorAgent
 
 
@@ -72,7 +80,7 @@ def cmd_rebuild_sparse(args):
 
 def cmd_admin(args):
     db.init_db()
-    import mongo
+    import app.database.mongo as mongo
     mongo.init_db()
     u = mongo.set_admin(args.username, not args.remove)
     if not u:

@@ -9,8 +9,8 @@ import time
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
-import memory
-import mongo
+import app.database.mongo as mongo
+import app.memory.conversation as memory
 from app.api.dependencies import bearer_token
 from app.core.config import settings
 from app.schemas.chat import ChatRequest

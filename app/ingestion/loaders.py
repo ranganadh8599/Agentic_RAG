@@ -12,7 +12,7 @@ import os
 from PIL import Image
 
 from app.core.config import settings
-from llm import chat_text
+from app.llm.client import chat_text
 
 
 # ---------------------------------------------------------------------------

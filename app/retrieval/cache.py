@@ -8,7 +8,7 @@
 
 import logging
 
-import db
+import app.database.postgres as db
 from app.core.config import settings
 
 log = logging.getLogger("retrieval")

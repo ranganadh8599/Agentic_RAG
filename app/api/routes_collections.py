@@ -3,7 +3,7 @@
 from fastapi import APIRouter, Query
 from pydantic import BaseModel
 
-import db
+import app.database.postgres as db
 from app.api.dependencies import page_params
 
 router = APIRouter()

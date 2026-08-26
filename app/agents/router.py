@@ -6,8 +6,8 @@ import re
 from functools import lru_cache
 
 from app.core.config import settings
+from app.llm.client import chat_text
 from app.llm.prompts import ROUTER_PROMPT
-from llm import chat_text
 
 _GREETING_RE = re.compile(
     r"^(?:hi+|hello+|hey+|yo+|hola|howdy|hiya|sup|wassup|whatsup|whats up|what up|"

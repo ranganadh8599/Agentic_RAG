@@ -3,7 +3,7 @@
 # live in MongoDB; this module re-exports the same API the agents and API layer
 # already use, so nothing downstream needs to change.
 
-from mongo import (
+from app.database.mongo import (
     create_conversation,
     conversation_owner,
     get_conversations,

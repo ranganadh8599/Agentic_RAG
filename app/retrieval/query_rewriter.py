@@ -8,8 +8,8 @@
 import logging
 
 from app.core.config import settings
+from app.llm.client import chat_text
 from app.llm.prompts import EXPANSION_PROMPT
-from llm import chat_text
 
 log = logging.getLogger("retrieval")
 

@@ -16,7 +16,7 @@ import logging
 import re
 import time
 
-import db
+import app.database.postgres as db
 import app.retrieval.reranker as rerank
 from app.core.config import settings
 from app.core.logging import fmt_table

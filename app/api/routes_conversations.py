@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
-import memory
+import app.memory.conversation as memory
 from app.api.dependencies import page_params, require_user
 
 router = APIRouter()

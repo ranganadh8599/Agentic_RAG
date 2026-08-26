@@ -9,7 +9,7 @@ from time import monotonic
 
 from fastapi import HTTPException, Request
 
-import mongo
+import app.database.mongo as mongo
 from app.core.config import settings
 
 
@@ -43,7 +43,7 @@ def page_params(limit: int | None, offset: int | None) -> tuple[int | None, int]
 
 def count_rows(table: str) -> int:
     """Row count for a table (used by /health)."""
-    import db
+    import app.database.postgres as db
     with db.get_conn().cursor() as cur:
         cur.execute(f"SELECT count(*) AS n FROM {table}")
         return cur.fetchone()["n"]

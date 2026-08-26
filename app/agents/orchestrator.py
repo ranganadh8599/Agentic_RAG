@@ -17,10 +17,10 @@ from app.citation.formatter import attach_page_images, format_sources
 from app.citation.validator import validated_citations
 from app.core.config import settings
 from app.core.logging import fmt_table
+from app.llm.client import chat_text
 from app.llm.prompts import GENERAL_PROMPT, GREETING_PROMPT, REWRITE_PROMPT
-from llm import chat_text
+import app.memory.conversation as memory
 import app.retrieval as retrieval
-import memory
 
 log = logging.getLogger("agents")
 

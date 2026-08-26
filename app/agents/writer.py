@@ -1,7 +1,7 @@
 # Agentic RAG - WriterAgent: grounded answer generation with [n] citations.
 
+from app.llm.client import chat_text
 from app.llm.prompts import WRITER_PROMPT
-from llm import chat_text
 
 
 class WriterAgent:
@@ -32,7 +32,7 @@ class WriterAgent:
 
     def stream(self, query, context_blocks, memory_text="", feedback=None):
         """Generator yielding (full_answer, delta) pairs."""
-        from llm import chat_stream
+        from app.llm.client import chat_stream
         messages = self._build_messages(query, context_blocks, memory_text, feedback)
         parts = []
         for delta in chat_stream(messages):
