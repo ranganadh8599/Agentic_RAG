@@ -40,19 +40,62 @@ def embed_query(query: str):
 # Semantic cache (stored in Postgres instead of Redis)
 # ---------------------------------------------------------------------------
 
-def semantic_cache_lookup(query_emb, collection_id: int | None = None, user_id: str | None = None):
+def _as_scopes(user_id):
+    """Normalize a cache scope into a list of buckets to check:
+    None -> [None] (shared/global), a string -> [that id], a list -> itself."""
+    if user_id is None:
+        return [None]
+    if isinstance(user_id, (list, tuple)):
+        return list(user_id)
+    return [user_id]
+
+
+def _scope_clause(scopes):
+    """Build a WHERE fragment matching any of the given cache scopes. None in
+    the list means the shared/global bucket (user_id IS NULL)."""
+    ids = [s for s in scopes if s is not None]
+    if ids and None in scopes:
+        return "(user_id = ANY(%s) OR user_id IS NULL)", [ids]
+    if ids:
+        return "user_id = ANY(%s)", [ids]
+    return "user_id IS NULL", []
+
+
+def _results_shared_safe(results, user_id):
+    """True when storing results under the given cache bucket cannot leak a
+    private document. The global bucket (user_id=None) is shared by every
+    user, so it may only hold results with no owned (user_id != NULL) docs;
+    per-user buckets are private to their owner, so always safe."""
+    if user_id is not None or not results:
+        return True
+    doc_ids = [r.get("doc_id") for r in results if r.get("doc_id")]
+    if not doc_ids:
+        return True
+    try:
+        with db.get_conn().cursor() as cur:
+            cur.execute(
+                "SELECT count(*) AS n FROM documents "
+                "WHERE id = ANY(%s) AND user_id IS NOT NULL",
+                (doc_ids,))
+            return cur.fetchone()["n"] == 0
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def semantic_cache_lookup(query_emb, collection_id: int | None = None, user_id=None):
     if not db.USE_PGVECTOR:
         return None
     _ph = f"%s::{db.VEC_CAST}"
+    scope_sql, scope_params = _scope_clause(_as_scopes(user_id))
     with db.get_conn().cursor() as cur:
         cur.execute(
             f"""SELECT id, response, sources, {db.score_expr('query_embedding', _ph)} AS sim
                FROM semantic_cache
                WHERE collection_id IS NOT DISTINCT FROM %s
-                 AND user_id IS NOT DISTINCT FROM %s
+                 AND {scope_sql}
                ORDER BY {db.dist_expr('query_embedding', _ph)}
                LIMIT 1""",
-            (db.to_db_vec(query_emb), collection_id, user_id, db.to_db_vec(query_emb)),
+            (db.to_db_vec(query_emb), collection_id, *scope_params, db.to_db_vec(query_emb)),
         )
         row = cur.fetchone()
     if row and row["sim"] is not None and row["sim"] >= settings.SEMANTIC_CACHE_THRESHOLD:
@@ -79,7 +122,7 @@ def semantic_cache_store(query: str, query_emb, response: str, model: str, sourc
 # ---------------------------------------------------------------------------
 
 def retrieval_cache_lookup(query_emb, collection_id: int | None = None,
-                           user_id: str | None = None):
+                           user_id=None):
     """Return cached reranked results for a near-identical popular query.
 
     Serves the exact reranked chunk list, so repeat questions skip hybrid
@@ -89,17 +132,18 @@ def retrieval_cache_lookup(query_emb, collection_id: int | None = None,
     if not db.USE_PGVECTOR or not settings.RETRIEVAL_CACHE_ENABLED:
         return None
     _ph = f"%s::{db.VEC_CAST}"
+    scope_sql, scope_params = _scope_clause(_as_scopes(user_id))
     with db.get_conn().cursor() as cur:
         cur.execute(
             f"""SELECT id, results, best_score,
                        {db.score_expr('query_embedding', _ph)} AS sim
                FROM retrieval_cache
                WHERE collection_id IS NOT DISTINCT FROM %s
-                 AND user_id IS NOT DISTINCT FROM %s
+                 AND {scope_sql}
                  AND {db.score_expr('query_embedding', _ph)} >= %s
                ORDER BY {db.dist_expr('query_embedding', _ph)}
                LIMIT 1""",
-            (db.to_db_vec(query_emb), collection_id, user_id, db.to_db_vec(query_emb),
+            (db.to_db_vec(query_emb), collection_id, *scope_params, db.to_db_vec(query_emb),
              settings.RETRIEVAL_CACHE_THRESHOLD, db.to_db_vec(query_emb)),
         )
         row = cur.fetchone()
@@ -191,7 +235,13 @@ def _norm_filters(filters):
         return None
     f = {}
     uid = filters.get("user_id")
-    if uid:
+    if isinstance(uid, (list, tuple)):
+        # A list of allowed owners; None in the list = the shared/admin-ingested
+        # (ownerless) docs a normal user is allowed to see.
+        vals = [None if v in (None, "", "None") else str(v) for v in uid]
+        if vals:
+            f["user_id"] = vals
+    elif uid:
         f["user_id"] = str(uid)
     dfrom = filters.get("date_from")
     if dfrom:
@@ -214,7 +264,19 @@ def _filter_where(filters):
     if not filters:
         return "", []
     uid = filters.get("user_id")
-    if uid:
+    if isinstance(uid, (list, tuple)):
+        parts = []
+        allowed = [v for v in uid if v is not None]
+        if None in uid:
+            # Ownerless docs ingested by an admin/CLI = the shared corpus that
+            # every normal user may retrieve.
+            parts.append("(d.user_id IS NULL AND d.ingested_by IS NOT NULL)")
+        if allowed:
+            parts.append("d.user_id = ANY(%s)")
+            params.append(allowed)
+        if parts:
+            where.append("(" + " OR ".join(parts) + ")")
+    elif uid:
         where.append("d.user_id = %s")
         params.append(uid)
     dfrom = filters.get("date_from")
@@ -247,7 +309,14 @@ def _passes_filter(row, filters) -> bool:
     if not filters:
         return True
     uid = filters.get("user_id")
-    if uid and row.get("user_id") != uid:
+    if isinstance(uid, (list, tuple)):
+        row_uid = row.get("user_id")
+        if row_uid is None:
+            if None not in uid or not row.get("ingested_by"):
+                return False
+        elif row_uid not in [v for v in uid if v is not None]:
+            return False
+    elif uid and row.get("user_id") != uid:
         return False
     dfrom, dto = filters.get("date_from"), filters.get("date_to")
     created = row.get("created_at")
@@ -278,7 +347,7 @@ def vector_search(query_emb, top_k: int, collection_id: int | None = None, filte
         post = _is_post_filter(filters)
         filter_where, filter_params = _filter_where(filters) if not post else ("", [])
         # Extra columns needed to trim in Python when post-filtering.
-        select_cols = ", d.user_id, d.created_at" if post else ""
+        select_cols = ", d.user_id, d.created_at, d.ingested_by" if post else ""
         oversample = settings.METADATA_FILTER_OVERSAMPLE if post else 1
         # Placeholders: SELECT vec, [WHERE collection], [WHERE filters], ORDER BY vec, LIMIT
         params = [db.to_db_vec(query_emb)]
@@ -339,7 +408,7 @@ def keyword_search(query: str, top_k: int, collection_id: int | None = None, fil
     coll_filter = "AND d.collection_id = %s" if collection_id is not None else ""
     post = _is_post_filter(filters)
     filter_where, filter_params = _filter_where(filters) if not post else ("", [])
-    select_cols = ", d.user_id, d.created_at" if post else ""
+    select_cols = ", d.user_id, d.created_at, d.ingested_by" if post else ""
     oversample = settings.METADATA_FILTER_OVERSAMPLE if post else 1
     params = [query, query, query, query]
     if collection_id is not None:
@@ -423,7 +492,7 @@ def sparse_search(query: str, top_k: int, collection_id: int | None = None, filt
     coll_filter = "AND d.collection_id = %s" if collection_id is not None else ""
     post = _is_post_filter(filters)
     filter_where, filter_params = _filter_where(filters) if not post else ("", [])
-    select_cols = ", d.user_id, d.created_at" if post else ""
+    select_cols = ", d.user_id, d.created_at, d.ingested_by" if post else ""
     oversample = settings.METADATA_FILTER_OVERSAMPLE if post else 1
     params = [qv]
     if collection_id is not None:
@@ -459,7 +528,7 @@ def filename_search(query: str, top_k: int, collection_id: int | None = None, fi
     coll_filter = "AND d.collection_id = %s" if collection_id is not None else ""
     post = _is_post_filter(filters)
     filter_where, filter_params = _filter_where(filters) if not post else ("", [])
-    select_cols = ", d.user_id, d.created_at" if post else ""
+    select_cols = ", d.user_id, d.created_at, d.ingested_by" if post else ""
     params = [collection_id] if collection_id is not None else []
     params.extend(filter_params)
     results = []
@@ -533,9 +602,30 @@ def retrieve(query: str, top_k: int | None = None, collection: str | None = None
                  filters, settings.METADATA_FILTER_MODE)
     t0 = time.perf_counter()
 
-    if use_cache and not filters:
+    # A user_id filter that stays inside the caller's own visibility (their id
+    # and/or the shared/global bucket) is redundant — the caches are already
+    # scoped per user — so it must NOT disable them. Any other filter
+    # (date/tags, or another user's id) still bypasses the caches: a cached
+    # result is scoped to its unfiltered context, so those can't be reused.
+    def _cache_compatible(filters, user_id):
+        if not filters:
+            return True
+        if set(filters) != {"user_id"}:
+            return False
+        allowed = filters["user_id"]
+        if not isinstance(allowed, (list, tuple)):
+            allowed = [allowed]
+        scopes = _as_scopes(user_id)
+        return all(v is None or v in scopes for v in allowed)
+
+    cache_safe = _cache_compatible(filters, user_id)
+    # Cache reads: a real user checks their own bucket first, then the
+    # shared/global bucket (the admin's cache). Admin/anonymous read global.
+    read_scopes = [None] if user_id is None else [user_id, None]
+
+    if use_cache and cache_safe:
         # 1. Semantic cache fast-path (scoped to collection + user).
-        cached = semantic_cache_lookup(q_emb, collection_id, user_id)
+        cached = semantic_cache_lookup(q_emb, collection_id, read_scopes)
         if cached:
             log.info("🗄️  Semantic cache hit — reusing previous answer | %.0f ms",
                      (time.perf_counter() - t0) * 1000)
@@ -548,7 +638,7 @@ def retrieve(query: str, top_k: int | None = None, collection: str | None = None
         # 1b. Retrieval-results cache: popular queries reuse their cached
         # reranked chunks, skipping hybrid search + RRF + cross-encoder rerank
         # entirely (the LLM answer is still generated fresh downstream).
-        rcache = retrieval_cache_lookup(q_emb, collection_id, user_id)
+        rcache = retrieval_cache_lookup(q_emb, collection_id, read_scopes)
         if rcache is not None:
             log.info("🗄️  Retrieval cache hit — reusing previous chunks | %.0f ms",
                      (time.perf_counter() - t0) * 1000)
@@ -670,7 +760,11 @@ def retrieve(query: str, top_k: int | None = None, collection: str | None = None
     # Cache strongly-grounded queries only (never weak/general ones), so a cache
     # hit can't flip a general-knowledge question onto weak doc chunks. Popular
     # repeats then skip the expensive search + rerank stage entirely.
-    if use_cache and not filters and results and best_score >= settings.GENERAL_STRONG_THRESHOLD:
+    # The shared/global cache bucket (user_id=None) is readable by every user,
+    # so it may only hold results that contain no private (owned) documents.
+    shared_safe = _results_shared_safe(results, user_id)
+    if use_cache and cache_safe and results and shared_safe \
+            and best_score >= settings.GENERAL_STRONG_THRESHOLD:
         retrieval_cache_store(query, q_emb, results, best_score, collection_id, user_id)
     latency_ms = {
         "stage1": round((t1 - t0) * 1000, 2),
@@ -679,4 +773,4 @@ def retrieve(query: str, top_k: int | None = None, collection: str | None = None
     }
     return {"results": results, "query_emb": q_emb, "collection_id": collection_id,
             "best_score": best_score, "latency_ms": latency_ms, "filters": filters,
-            "user_id": user_id}
+            "user_id": user_id, "shared_safe": shared_safe}

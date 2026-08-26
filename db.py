@@ -129,6 +129,11 @@ def init_db() -> bool:
         ALTER TABLE documents ADD COLUMN IF NOT EXISTS collection_id INT REFERENCES collections(id) ON DELETE SET NULL;
         ALTER TABLE chunks ADD COLUMN IF NOT EXISTS content_hash TEXT;
         ALTER TABLE documents ADD COLUMN IF NOT EXISTS user_id TEXT;
+        ALTER TABLE documents ADD COLUMN IF NOT EXISTS ingested_by TEXT;
+        -- Existing ownerless docs were all admin/CLI uploads: treat them as the
+        -- shared corpus so normal users can still see them.
+        UPDATE documents SET ingested_by = 'admin'
+        WHERE user_id IS NULL AND ingested_by IS NULL;
 
         CREATE TABLE IF NOT EXISTS retrieval_cache (
             id              SERIAL PRIMARY KEY,

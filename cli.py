@@ -21,7 +21,8 @@ def cmd_ingest(args):
                                       skip_duplicates=not args.force,
                                       collection=args.collection,
                                       update_existing=args.update,
-                                      user_id=args.user)
+                                      user_id=args.user,
+                                      ingested_by="cli")
     print(f"Done: {docs} document(s) ingested into table '{args.collection}', "
           f"{chunks} chunk(s) total.")
 

@@ -327,12 +327,23 @@ class OrchestratorAgent:
             memory.add_message(conversation_id, "user", query, embedding=q_emb)
 
     def _persist(self, conversation_id, query, answer, q_emb, cached, sources=None,
-                 collection_id=None, user_id=None):
+                 collection_id=None, user_id=None, filters=None, shared_safe=True):
         if conversation_id:
             memory.add_message(conversation_id, "assistant", answer,
                                embedding=retrieval.embed_query(answer),
                                sources=sources)
-        if not cached and q_emb is not None:
+        # Never write into the SHARED cache bucket (user_id=None) unless the
+        # retrieval stayed inside the shared corpus — a private document's
+        # answer must not leak to every user. Non-admins only ever write to
+        # their own bucket, which is safe.
+        shared_ok = shared_safe and (
+            not filters or (
+                set(filters) == {"user_id"}
+                and isinstance(filters.get("user_id"), (list, tuple))
+                and set(filters["user_id"]) == {None}
+            ))
+        can_cache = user_id is not None or shared_ok
+        if not cached and q_emb is not None and can_cache:
             retrieval.semantic_cache_store(query, q_emb, answer, settings.LLM_MODEL,
                                            sources, collection_id, user_id)
 
@@ -474,7 +485,9 @@ class OrchestratorAgent:
             sources, answer = self._cited_sources(answer, blocks)
 
         self._persist(conversation_id, query, answer, q_emb, result.get("cached"),
-                      sources, result.get("collection_id"), user_id)
+                      sources, result.get("collection_id"), user_id,
+                      filters=result.get("filters"),
+                      shared_safe=result.get("shared_safe", True))
         log.info("📝 Generated answer (%d chars):\n%s", len(answer or ""), answer or "")
         if sources:
             log.info("📚 Cited sources:\n%s", fmt_table(
@@ -570,7 +583,9 @@ class OrchestratorAgent:
             sources, answer = self._cited_sources(answer, blocks)
 
         self._persist(conversation_id, query, answer, q_emb, result.get("cached"),
-                      sources, result.get("collection_id"), user_id)
+                      sources, result.get("collection_id"), user_id,
+                      filters=result.get("filters"),
+                      shared_safe=result.get("shared_safe", True))
         log.info("📝 Generated answer (%d chars):\n%s", len(answer or ""), answer or "")
         if sources:
             log.info("📚 Cited sources:\n%s", fmt_table(

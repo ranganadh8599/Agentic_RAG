@@ -88,9 +88,11 @@ Everything is provider-agnostic: all LLM and embedding calls go through
 - **Smarter retrieval** — two-stage retrieve→rerank with a cross-encoder
   (GPU-accelerated), BM25-style sparse search for exact names/codes/acronyms,
   multi-turn follow-up rewriting, and metadata filtering (user/tags/date).
-- **Per-user privacy** — caches are scoped per user; admins share the global
-  cache, regular users only see their own, so private documents never leak via a
-  cache hit.
+- **Roles & per-user privacy** — the **shared corpus** (admin/CLI-ingested
+  docs) is visible to everyone. A normal user additionally sees their **own**
+  uploads; a user's private uploads are visible to **nobody else — not even the
+  admin**. Uploads are auto-owned (`user_id`) and tagged with who ingested them
+  (`ingested_by`), enforced at the chat endpoint.
 - **Full observability** — end-to-end pipeline logging with ASCII tables
   (variants, ranked candidates, cited sources) and date/time-based log files.
 - **Developer friendly** — OpenAI-compatible API (`/v1/chat/completions`),
@@ -139,9 +141,11 @@ Everything is provider-agnostic: all LLM and embedding calls go through
   (any/all), or a `date_from`/`date_to` range, applied before the ANN scan
   (`METADATA_FILTER_MODE=pre`, fast) or after (`post`, guarantees recall).
 - **Per-user + admin cache scoping** — caches are scoped by `user_id`: admins
-  and anonymous share the global cache, regular users get their own, so private
-  documents never leak via a cache hit. Grant admin with `cli.py admin <username>`
-  (revoke with `--remove`).
+  and anonymous use the shared/global cache; a normal user **reads** their own
+  bucket **plus the global (admin) cache** but **writes only to their own**. The
+  global bucket never stores results that touch a private document, so a user
+  reading the admin cache can never leak another user's files. Grant admin with
+  `cli.py admin <username>` (revoke with `--remove`).
 - **Hybrid retrieval** — vector search + Postgres full-text keyword search,
   **LLM query expansion**, and **reciprocal-rank fusion**.
 - **Semantic cache** — repeated queries answered instantly when a semantically
@@ -299,7 +303,7 @@ sidebar shows collections, your documents, and stats.*
 | Table | Purpose |
 |-------|---------|
 | `collections` | named tables/namespaces; each document, chunk, and cache row belongs to one |
-| `documents` | one row per ingested file (title, type, path, metadata, `collection_id`) |
+| `documents` | one row per ingested file (title, type, path, metadata, `user_id` owner, `ingested_by` uploader, `collection_id`) |
 | `chunks` | chunked content with embeddings (vector or jsonb), `collection_id` |
 | `semantic_cache` | query→answer cache with embeddings (cosine threshold), `collection_id` |
 
@@ -307,7 +311,7 @@ sidebar shows collections, your documents, and stats.*
 
 | Collection | Purpose |
 |-------|---------|
-| `users` | accounts — `username` (unique) + `display_name` + PBKDF2 `password_hash` |
+| `users` | accounts — `username` (unique) + `display_name` + PBKDF2 `password_hash` + `is_admin` flag |
 | `sessions` | login tokens (opaque bearer tokens, 30-day TTL via Mongo TTL index) |
 | `conversations` | chat sessions (`title` + `user_id`; deleting cascades to messages) |
 | `messages` | per-turn messages (`conversation_id` + embeddings for semantic memory) |
