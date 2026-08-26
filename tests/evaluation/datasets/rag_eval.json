@@ -1,26 +1,32 @@
 [
   {
     "question": "What is the project idea described in the notes?",
+    "ground_truth": "A multi-agent RAG system that reads PDFs and images, stores everything in PostgreSQL, and supports OpenAI, Gemini, and Claude with semantic caching, hybrid retrieval, and grounded citations.",
     "relevant_documents": ["notes.txt"]
   },
   {
     "question": "Which index type should be tried for fast search?",
+    "ground_truth": "pgvector HNSW indexes for fast search.",
     "relevant_documents": ["notes.txt"]
   },
   {
     "question": "Which AI providers should the RAG system support?",
+    "ground_truth": "OpenAI, Gemini, and Claude.",
     "relevant_documents": ["notes.txt"]
   },
   {
     "question": "What feature would summarize embedded images?",
+    "ground_truth": "A vision model to summarize embedded images.",
     "relevant_documents": ["notes.txt"]
   },
   {
     "question": "Who is the data contact listed in the readme template?",
+    "ground_truth": "Daniel E. Cook.",
     "relevant_documents": ["Scientific-Readme-Template.md"]
   },
   {
     "question": "What should the template describe under the Data section?",
+    "ground_truth": "The dataset, how it was obtained, and other important details, including a data contact and an expiration date.",
     "relevant_documents": ["Scientific-Readme-Template.md"]
   }
 ]

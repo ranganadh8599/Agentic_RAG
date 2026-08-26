@@ -510,6 +510,32 @@ agentic-rag/
 
 ## Testing
 
+### Pytest suite (primary)
+
+A hermetic pytest suite covering unit, API, integration, e2e, and
+architecture-contract tests. The default run uses mock LLM/embeddings and
+deterministic retrieval, so it is fast (~11s) and needs no API keys, model
+downloads, or model randomness. Integration tests use the real local Postgres
+(plus the real FTS channel):
+
+```powershell
+python -m pytest
+```
+
+RAG quality evaluation (recall@k + MRR, RAGAS generation metrics, citation
+accuracy, latency) is opt-in and needs real models configured in `.env`:
+
+```powershell
+python -m pytest -m evaluation
+```
+
+Structure: `tests/unit` (component correctness) · `tests/unit/api` (HTTP) ·
+`tests/integration` (real DB/component interaction) · `tests/e2e` (user
+workflows) · `tests/architecture` (dependency contracts) · `tests/evaluation`
+(retrieval / generation / citations / benchmarks, opt-in).
+
+### Standalone end-to-end script (needs the API server on port 8000)
+
 Run the end-to-end edge-case suite (needs the API server running on port 8000):
 
 ```powershell

@@ -35,3 +35,20 @@ def test_conversation_not_found(client):
         "messages": [{"role": "user", "content": "hello"}],
         "conversation_id": "000000000000000000000000"})
     assert r.status_code == 404
+
+
+def test_anonymous_conversation_not_resumable(client):
+    """Documented behavior: anonymous conversations can't be resumed by id.
+
+    An anonymous conversation IS created (user_id=NULL), but conversation_owner
+    returns None for it, which the chat endpoint treats as "not found" → 404.
+    """
+    r1 = client.post("/v1/chat/completions", json={
+        "messages": [{"role": "user", "content": "hello"}]})
+    conv = r1.json()["conversation_id"]
+    assert conv  # it was created and returned
+
+    r2 = client.post("/v1/chat/completions", json={
+        "messages": [{"role": "user", "content": "hello"}],
+        "conversation_id": conv})
+    assert r2.status_code == 404

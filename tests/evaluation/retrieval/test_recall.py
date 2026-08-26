@@ -16,7 +16,7 @@ import pytest
 
 from app.core.config import settings
 
-DATASET = Path(__file__).parent / "datasets" / "rag_eval.json"
+DATASET = Path(__file__).parents[1] / "datasets" / "rag_eval.json"
 TOP_K = 5
 # Modest quality floors — raise them as the pipeline improves.
 MIN_RECALL = 0.5

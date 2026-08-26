@@ -94,6 +94,10 @@ def chat_endpoint(req: ChatRequest, request: Request):
              filters, query[:120])
     if req.conversation_id is not None:
         owner = memory.conversation_owner(req.conversation_id)
+        # Documented behavior (Option A): conversation ownership is tied to an
+        # authenticated user. Anonymous conversations have user_id=NULL, so
+        # conversation_owner returns None and they are NOT resumable by id
+        # (404). Resume requires an authenticated session.
         if owner is None:
             raise HTTPException(status_code=404, detail="conversation not found")
         if user and owner and owner != user["id"]:
