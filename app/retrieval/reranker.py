@@ -12,7 +12,7 @@
 import logging
 import math
 
-from config import settings
+from app.core.config import settings
 
 log = logging.getLogger(__name__)
 

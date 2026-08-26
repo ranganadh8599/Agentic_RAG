@@ -11,7 +11,7 @@ import time
 import litellm
 import numpy as np
 
-from config import settings
+from app.core.config import settings
 
 log = logging.getLogger("llm")
 

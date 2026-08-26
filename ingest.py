@@ -7,13 +7,13 @@ import re
 
 import psycopg
 
-from config import settings
+from app.core.config import settings
+from app.ingestion.chunking import chunk_text
+from app.retrieval import sparse
+import app.retrieval as retrieval
 import db
-import retrieval
-import sparse
-from chunking import chunk_text
-from llm import embed_texts
 import loaders
+from llm import embed_texts
 
 # Control characters that PostgreSQL text fields cannot store (NUL) or that are
 # invalid/unwanted. Keep tab (\t), newline (\n), carriage return (\r).

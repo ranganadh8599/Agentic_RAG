@@ -15,7 +15,9 @@ import math
 import re
 from collections import Counter
 
-from config import settings
+from app.core.config import settings
+from app.retrieval.filters import filter_where as build_filter_where
+from app.retrieval.filters import is_post_filter, passes_filter
 import db
 
 log = logging.getLogger(__name__)
@@ -186,6 +188,46 @@ def query_vector(query: str):
     if not pairs:
         return None
     return "{" + ",".join(f"{i}:{w:.6f}" for i, w in pairs) + "}/" + str(settings.SPARSE_DIM)
+
+
+def sparse_search(query: str, top_k: int, collection_id: int | None = None, filters=None):
+    """BM25-style sparse retrieval over EXACT terms (names, codes, acronyms).
+
+    Matches documents containing the query's exact tokens via inner product on
+    sparsevec. Catches what dense embeddings miss — e.g. 'SKU-4471' matches
+    only chunks that literally contain '4471'.
+    """
+    if not db.SPARSE_READY or not settings.USE_SPARSE_SEARCH:
+        return []
+    qv = query_vector(query)
+    if qv is None:
+        return []
+    coll_filter = "AND d.collection_id = %s" if collection_id is not None else ""
+    post = is_post_filter(filters)
+    filter_where, filter_params = build_filter_where(filters) if not post else ("", [])
+    select_cols = ", d.user_id, d.created_at, d.ingested_by" if post else ""
+    oversample = settings.METADATA_FILTER_OVERSAMPLE if post else 1
+    params = [qv]
+    if collection_id is not None:
+        params.append(collection_id)
+    params.extend(filter_params)
+    params.append(qv)
+    params.append(top_k * oversample)
+    with db.get_conn().cursor() as cur:
+        cur.execute(
+            f"""SELECT c.id, c.content, c.metadata, d.title, d.id AS doc_id, d.source_type{select_cols},
+                       - (c.sparse_embedding <#> %s::sparsevec) AS score
+               FROM chunks c JOIN documents d ON d.id = c.document_id
+               WHERE c.sparse_embedding IS NOT NULL {coll_filter}{filter_where}
+               ORDER BY c.sparse_embedding <#> %s::sparsevec
+               LIMIT %s""",
+            params,
+        )
+        rows = cur.fetchall()
+    results = [(float(r["score"] or 0.0), r) for r in rows if (r["score"] or 0.0) > 0.0]
+    if post:
+        results = [(s, r) for s, r in results if passes_filter(r, filters)]
+    return results
 
 
 def remove_texts(conn, contents):

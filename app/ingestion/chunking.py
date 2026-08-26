@@ -3,7 +3,7 @@
 # deliberately avoids splitting inside words and keeps mixed CJK text intact,
 # plus a small overlap so chunk boundaries don't lose context.
 
-from config import settings
+from app.core.config import settings
 
 # Separators ordered by priority. CJK punctuation is included so Chinese /
 # Japanese / Korean text breaks on sentence punctuation, not on spaces.

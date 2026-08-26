@@ -12,7 +12,7 @@ import sys
 import db
 import ingest
 import memory
-from agents import OrchestratorAgent
+from app.agents.orchestrator import OrchestratorAgent
 
 
 def cmd_ingest(args):
@@ -65,7 +65,7 @@ def cmd_chat(args):
 
 def cmd_rebuild_sparse(args):
     db.init_db()
-    import sparse
+    from app.retrieval import sparse
     n = sparse.rebuild()
     print(f"Rebuilt sparse vectors + term stats for {n} chunk(s).")
 
@@ -100,8 +100,8 @@ def cmd_reset(args):
 
 
 def main():
-    import logging_config
-    logging_config.setup_logging()
+    from app.core.logging import setup_logging
+    setup_logging()
     p = argparse.ArgumentParser(prog="agentic-rag", description="Multi-agent RAG over your documents")
     sub = p.add_subparsers(dest="command", required=True)
 

@@ -11,7 +11,7 @@ import os
 
 from PIL import Image
 
-from config import settings
+from app.core.config import settings
 from llm import chat_text
 
 

@@ -25,9 +25,12 @@ _FORMAT = "%(asctime)s | %(levelname)-5s | %(message)s"
 _DATEFMT = "%H:%M:%S"
 
 # Every log line is mirrored to a file under LOG_DIR/<date>/app_<timestamp>.log
-# for post-mortem inspection (disable with LOG_TO_FILE=0).
+# for post-mortem inspection (disable with LOG_TO_FILE=0). LOG_DIR defaults to
+# the repository root's logs/ directory (two levels up from app/core/).
 LOG_DIR = os.getenv(
-    "LOG_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs"))
+    "LOG_DIR",
+    os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                  "..", "..", "logs")))
 _log_file_path: str | None = None
 
 

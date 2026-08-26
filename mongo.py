@@ -17,7 +17,7 @@ from bson import ObjectId
 from pymongo import MongoClient, ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
-from config import settings
+from app.core.config import settings
 
 _client = MongoClient(settings.MONGO_URI, serverSelectionTimeoutMS=2000)
 _db = _client[settings.MONGO_DB]

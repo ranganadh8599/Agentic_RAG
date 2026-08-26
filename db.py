@@ -13,7 +13,7 @@ import numpy as np
 import psycopg
 from psycopg.rows import dict_row
 
-from config import settings
+from app.core.config import settings
 
 log = logging.getLogger("db")
 

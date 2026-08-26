@@ -276,7 +276,7 @@ C:\mongodb\mongodb-win32-x86_64-windows-8.3.8\bin\mongod.exe --dbpath C:\mongodb
 #    NOTE: mongod is a manual background process (not a service) — start it again after a reboot.
 
 # 7. Run the API server
-uvicorn api:app --reload --port 8000
+uvicorn app.main:app --reload --port 8000
 curl -X POST http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"messages":[{"role":"user","content":"Summarize the PDF"}],"stream":true}'
@@ -473,22 +473,34 @@ live per-file progress. The UI reads these from `GET /api/config`.
 
 ```
 agentic-rag/
-├── config.py      # env-driven settings
+├── app/            # application package
+│   ├── main.py         # FastAPI app entry point (uvicorn app.main:app)
+│   ├── api/            # FastAPI routers + dependencies
+│   │   ├── routes_health.py        # /health, /api/config
+│   │   ├── routes_documents.py     # /documents, /images, /ingest
+│   │   ├── routes_collections.py   # /collections
+│   │   ├── routes_auth.py          # register / login / logout / me / password
+│   │   ├── routes_conversations.py # chat history (ownership enforced)
+│   │   ├── routes_chat.py          # OpenAI-compatible /v1/chat/completions
+│   │   └── dependencies.py         # bearer token, auth rate limit, pagination
+│   ├── agents/       # Router / Retriever / Writer / Critic / Orchestrator
+│   ├── retrieval/    # hybrid retrieval + caches + RRF + rerank
+│   │   ├── hybrid.py, dense.py, sparse.py, reranker.py, fusion.py,
+│   │   └── query_rewriter.py, cache.py, filters.py
+│   ├── ingestion/    # pipeline, loaders, chunking
+│   ├── llm/          # client, embeddings, prompts
+│   ├── database/     # Postgres (db.py) + Mongo persistence
+│   ├── memory/       # conversation memory
+│   ├── citation/     # validator / sanitizer / formatter
+│   ├── core/         # config, logging, exceptions
+│   └── schemas/      # chat / users request models
+├── cli.py         # ingest / ask / chat / stats / admin / reset
 ├── db.py          # Postgres + pgvector schema and vector helpers
 ├── mongo.py       # MongoDB users, sessions, conversations, messages
 ├── llm.py         # unified multi-provider LLM + embeddings (with mock)
-├── chunking.py    # CJK-safe recursive chunker
-├── loaders.py     # PDF / image (vision) / text loaders
 ├── ingest.py      # ingestion pipeline
-├── rerank.py      # cross-encoder reranker (two-stage retrieval, GPU-aware)
-├── sparse.py      # BM25-style sparse search (exact names/codes/acronyms)
-├── retrieval.py   # hybrid retrieval + semantic/retrieval caches + RRF + rerank
-├── logging_config.py  # central logging (console + date/time log files + tables)
-├── memory.py      # conversation memory (recent + relevant)
-├── agents.py      # Router / Retriever / Writer / Critic / Orchestrator
-├── prompts.py     # agent prompts
-├── api.py         # FastAPI server (OpenAI-compatible) + real auth
-├── cli.py         # ingest / ask / chat / stats / admin / reset
+├── loaders.py     # PDF / image (vision) / text loaders
+├── memory.py      # conversation memory (re-exports mongo)
 ├── eval_ragas.py  # RAGAS end-to-end evaluation (faithfulness, relevancy, ...)
 ├── recall_check.py  # recall@k + MRR regression harness
 ├── benchmark_rerank.py  # rerank candidate-pool benchmark + FTS A/B
