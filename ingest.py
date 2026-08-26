@@ -1,6 +1,7 @@
 # Agentic RAG - ingestion pipeline: load -> chunk -> embed -> store in Postgres.
 # Uses asymmetric document prefixes when enabled.
 
+import hashlib
 import os
 import re
 
@@ -8,6 +9,8 @@ import psycopg
 
 from config import settings
 import db
+import retrieval
+import sparse
 from chunking import chunk_text
 from llm import embed_texts
 import loaders
@@ -78,6 +81,141 @@ def _store_section_image(conn, doc_id: int, sec: dict) -> int | None:
         return cur.fetchone()["id"]
 
 
+def _build_chunks(conn, doc_id: int, sections, chunk_size: int, chunk_overlap: int):
+    """Flatten sections into [(text, meta)] chunks (storing section images)."""
+    payload = []
+    for sec in sections:
+        # Store any associated image so the UI can show it alongside sources.
+        image_id = _store_section_image(conn, doc_id, sec)
+        for i, c in enumerate(chunk_text(sec["text"], chunk_size, chunk_overlap)):
+            c = sanitize_text(c)
+            if not c:
+                continue
+            meta = dict(sec["metadata"])
+            meta["chunk"] = i
+            if image_id is not None and i == 0:
+                meta["image_id"] = image_id
+            payload.append((c, meta))
+    return payload
+
+
+def _chunk_insert(doc_id, content, meta, embedding, content_hash, sparse_vec, token_count):
+    """SQL + params to insert a chunk row. Sparse columns are referenced ONLY
+    when the schema has them (pgvector >= 0.7); otherwise omitted so ingest
+    still works on older pgvector (SPARSE_READY=False)."""
+    if db.SPARSE_READY:
+        return (
+            "INSERT INTO chunks (document_id, content, chunk_index, metadata, embedding, "
+            "content_hash, sparse_embedding, token_count) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+            (doc_id, content, meta.get("chunk"), db.to_json(meta), db.to_db_vec(embedding),
+             content_hash, sparse_vec, token_count),
+        )
+    return (
+        "INSERT INTO chunks (document_id, content, chunk_index, metadata, embedding, content_hash) "
+        "VALUES (%s, %s, %s, %s, %s, %s)",
+        (doc_id, content, meta.get("chunk"), db.to_json(meta), db.to_db_vec(embedding),
+         content_hash),
+    )
+
+
+def _delta_update(conn, doc_id: int, sections, chunk_size: int, chunk_overlap: int,
+                  progress=print, on_progress=None) -> tuple[int, int, int]:
+    """Re-ingest a document, reusing unchanged chunks and embedding only the
+    changed ones. Returns (stored, reused, removed) counts.
+
+    Two chunks count as identical when their sanitized text hashes to the same
+    sha256 (content_hash) — safe because chunking is deterministic, so unchanged
+    sections always produce byte-identical chunks.
+    """
+    # Flatten chunks WITHOUT storing images yet — images are stored below only
+    # for sections whose content actually changed (avoids orphaned blobs on
+    # repeated delta updates).
+    payload = []  # (section_idx, text, meta)
+    for sec_idx, sec in enumerate(sections):
+        for i, c in enumerate(chunk_text(sec["text"], chunk_size, chunk_overlap)):
+            c = sanitize_text(c)
+            if not c:
+                continue
+            meta = dict(sec["metadata"])
+            meta["chunk"] = i
+            payload.append((sec_idx, c, meta))
+    if not payload:
+        return 0, 0, 0
+    sec_idxs = [s for s, _t, _m in payload]
+    texts = [t for _s, t, _m in payload]
+    metas = [m for _s, _t, m in payload]
+    new_hashes = [hashlib.sha256(c.encode("utf-8")).hexdigest() for c in texts]
+
+    # Load existing chunk hashes, backfilling any that predate the column so a
+    # first delta on an old corpus is still efficient.
+    with conn.cursor() as cur:
+        cur.execute("SELECT id, content, content_hash FROM chunks WHERE document_id = %s", (doc_id,))
+        existing_rows = cur.fetchall()
+    existing: dict[str, int] = {}
+    backfill = []
+    for r in existing_rows:
+        h = r["content_hash"]
+        if not h:
+            h = hashlib.sha256((r["content"] or "").encode("utf-8")).hexdigest()
+            backfill.append((h, r["id"]))
+        existing[h] = r["id"]
+    if backfill:
+        with conn.cursor() as cur:
+            cur.executemany("UPDATE chunks SET content_hash = %s WHERE id = %s", backfill)
+
+    reused = sum(1 for h in new_hashes if h in existing)
+    to_embed = [i for i, h in enumerate(new_hashes) if h not in existing]
+
+    # Store images ONLY for sections whose FIRST chunk is new (a reused first
+    # chunk already references an image). This matches fresh-ingest display
+    # behavior (image attached to the section's first chunk) and never creates
+    # orphaned image blobs on repeated updates.
+    for i in to_embed:
+        if metas[i].get("chunk") == 0:
+            img_id = _store_section_image(conn, doc_id, sections[sec_idxs[i]])
+            if img_id is not None:
+                metas[i]["image_id"] = img_id
+
+    # Embed + store ONLY the changed chunks (batched, incremental).
+    stored = 0
+    batch = settings.EMBED_BATCH_SIZE
+    for start in range(0, len(to_embed), batch):
+        idxs = to_embed[start:start + batch]
+        new_texts = [texts[i] for i in idxs]
+        embed_in = ([settings.DOC_PREFIX + t for t in new_texts]
+                    if settings.USE_ASYMMETRIC_PREFIX else new_texts)
+        embeddings = embed_texts(embed_in)
+        sparse_vecs, token_counts = sparse.build_doc_batch(conn, new_texts)
+        with conn.cursor() as cur:
+            for k, (i, e) in enumerate(zip(idxs, embeddings)):
+                sql, params = _chunk_insert(
+                    doc_id, texts[i], metas[i], e, new_hashes[i],
+                    sparse_vecs[k], token_counts[k])
+                cur.execute(sql, params)
+        stored += len(embeddings)
+        pct = min(95, 30 + round(65 * stored / max(len(to_embed), 1)))
+        msg = f"  ...updated {stored}/{len(to_embed)} changed chunks"
+        _report(progress, on_progress, "embedding", pct, msg)
+
+    # Drop chunks that no longer appear in the new content.
+    removed = 0
+    removed_contents = []
+    with conn.cursor() as cur:
+        cur.execute(
+            "DELETE FROM chunks WHERE document_id = %s "
+            "AND (content_hash IS NULL OR content_hash <> ALL(%s)) "
+            "RETURNING content",
+            (doc_id, new_hashes),
+        )
+        removed_contents = [r["content"] for r in cur.fetchall()]
+        removed = len(removed_contents)
+    # Keep sparse term statistics consistent with the removed chunks.
+    sparse.remove_texts(conn, removed_contents)
+
+    return stored, reused, removed
+
+
 def _report(progress, on_progress, phase, percent, message=None):
     """Report structured progress to on_progress (dict) and a human message to
     progress (print). message=None logs only to on_progress (no CLI spam)."""
@@ -95,12 +233,22 @@ def _report(progress, on_progress, phase, percent, message=None):
 
 def ingest_file(path: str, title: str | None = None, progress=print,
                 skip_duplicates: bool = True, collection: str = "default",
-                on_progress=None) -> tuple[int, int]:
-    """Ingest a file. Returns (document_id, chunk_count).
+                on_progress=None, update_existing: bool = False,
+                user_id: str | None = None) -> tuple[int, int, dict]:
+    """Ingest a file. Returns (document_id, chunk_count, info).
+
+    info describes what happened:
+      {"mode": "ingested" | "updated" | "skipped" | "empty"}, plus
+      {"reused": int, "removed": int} when mode == "updated".
 
     The file is stored in the named collection (auto-created if missing).
     If skip_duplicates is True and a document with the same title already
     exists in that collection, the file is skipped.
+
+    update_existing=True turns re-uploads of the same file into a DELTA update:
+    chunks whose content is unchanged are reused (same content_hash, no
+    re-embedding), only changed chunks are embedded + stored, and chunks that
+    no longer appear are deleted. No duplicate chunks/embeddings.
 
     on_progress is an optional callable receiving {"phase", "percent",
     "message"} (e.g. extracting/chunking/embedding/done with a 0-100
@@ -114,18 +262,22 @@ def ingest_file(path: str, title: str | None = None, progress=print,
     conn = db.get_conn()
     collection_id = db.get_or_create_collection(collection or "default")
 
-    # Skip if a document with the same name already exists in this collection.
-    if skip_duplicates:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT id FROM documents WHERE lower(title) = lower(%s) AND collection_id = %s LIMIT 1",
-                (title, collection_id),
-            )
-            row = cur.fetchone()
-        if row:
+    # Look up an existing document with the same name in this collection.
+    existing_id = None
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT id FROM documents WHERE lower(title) = lower(%s) AND collection_id = %s LIMIT 1",
+            (title, collection_id),
+        )
+        row = cur.fetchone()
+    if row:
+        if skip_duplicates:
             msg = f"  - skipped duplicate '{title}' (already exists as doc {row['id']})"
             _report(progress, on_progress, "done", 100, msg)
-            return row["id"], 0
+            return row["id"], 0, {"mode": "skipped"}
+        if update_existing:
+            existing_id = row["id"]
+        # else: fall through and create a new (duplicate) document row.
 
     _report(progress, on_progress, "extracting", 10, f"  - reading '{title}'")
     sections = None
@@ -139,17 +291,34 @@ def ingest_file(path: str, title: str | None = None, progress=print,
     if not sections or not any((s.get("text") or "").strip() for s in sections):
         msg = f"  - no extractable text in '{title}'; skipping"
         _report(progress, on_progress, "done", 100, msg)
-        return 0, 0
+        return 0, 0, {"mode": "empty"}
     _report(progress, on_progress, "extracting", 20, f"  - extracted text from {title}")
 
     source_type = ext.lstrip(".") or "file"
 
+    # Delta update: reuse unchanged chunks (same content_hash), embed only the
+    # changed ones, and drop chunks that are no longer present.
+    if existing_id is not None:
+        if user_id is not None:
+            with conn.cursor() as cur:
+                cur.execute("UPDATE documents SET user_id = %s WHERE id = %s",
+                            (user_id, existing_id))
+        chunk_size, chunk_overlap = _chunk_params(title, sections)
+        stored, reused, removed = _delta_update(
+            conn, existing_id, sections, chunk_size, chunk_overlap,
+            progress, on_progress)
+        msg = (f"  * updated '{title}' (doc {existing_id}): +{stored} embedded, "
+               f"{reused} unchanged, -{removed} removed")
+        _report(progress, on_progress, "done", 100, msg)
+        retrieval.clear_retrieval_cache()
+        return existing_id, stored, {"mode": "updated", "reused": reused, "removed": removed}
+
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "INSERT INTO documents (collection_id, title, source_type, source_path) "
-                "VALUES (%s, %s, %s, %s) RETURNING id",
-                (collection_id, title, source_type, path),
+                "INSERT INTO documents (collection_id, title, source_type, source_path, user_id) "
+                "VALUES (%s, %s, %s, %s, %s) RETURNING id",
+                (collection_id, title, source_type, path, user_id),
             )
             doc_id = cur.fetchone()["id"]
     except psycopg.errors.UniqueViolation:
@@ -166,30 +335,16 @@ def ingest_file(path: str, title: str | None = None, progress=print,
         if row:
             msg = f"  - skipped duplicate '{title}' (already exists as doc {row['id']})"
             _report(progress, on_progress, "done", 100, msg)
-            return row["id"], 0
+            return row["id"], 0, {"mode": "skipped"}
         raise
 
     # 1. Choose chunk size: short structured docs (resumes/forms) automatically
     #    get larger chunks so their sections stay intact.
     chunk_size, chunk_overlap = _chunk_params(title, sections)
 
-    chunk_texts: list[str] = []
-    meta_list: list[dict] = []
-    for sec in sections:
-        # Store any associated image so the UI can show it alongside sources.
-        image_id = _store_section_image(conn, doc_id, sec)
-
-        chunks = chunk_text(sec["text"], chunk_size, chunk_overlap)
-        for i, c in enumerate(chunks):
-            c = sanitize_text(c)
-            if not c:
-                continue
-            meta = dict(sec["metadata"])
-            meta["chunk"] = i
-            if image_id is not None and i == 0:
-                meta["image_id"] = image_id
-            chunk_texts.append(c)
-            meta_list.append(meta)
+    payload = _build_chunks(conn, doc_id, sections, chunk_size, chunk_overlap)
+    chunk_texts = [c for c, _ in payload]
+    meta_list = [m for _, m in payload]
 
     _report(progress, on_progress, "chunking", 30,
             f"  - chunked into {len(chunk_texts)} chunks")
@@ -201,17 +356,19 @@ def ingest_file(path: str, title: str | None = None, progress=print,
     stored = 0
     total = max(len(chunk_texts), 1)
     for i in range(0, len(chunk_texts), batch):
-        texts = chunk_texts[i:i + batch]
-        if settings.USE_ASYMMETRIC_PREFIX:
-            texts = [settings.DOC_PREFIX + t for t in texts]
-        embeddings = embed_texts(texts)
+        batch_texts = chunk_texts[i:i + batch]
+        embed_in = ([settings.DOC_PREFIX + t for t in batch_texts]
+                    if settings.USE_ASYMMETRIC_PREFIX else batch_texts)
+        embeddings = embed_texts(embed_in)
+        # BM25-sparse side (exact terms): sparsevec + term stats for this batch.
+        sparse_vecs, token_counts = sparse.build_doc_batch(conn, batch_texts)
         with conn.cursor() as cur:
-            for c, m, e in zip(chunk_texts[i:i + batch], meta_list[i:i + batch], embeddings):
-                cur.execute(
-                    "INSERT INTO chunks (document_id, content, chunk_index, metadata, embedding) "
-                    "VALUES (%s, %s, %s, %s, %s)",
-                    (doc_id, c, m.get("chunk"), db.to_json(m), db.to_db_vec(e)),
-                )
+            for j, (c, m, e) in enumerate(zip(batch_texts, meta_list[i:i + batch], embeddings)):
+                sql, params = _chunk_insert(
+                    doc_id, c, m, e,
+                    hashlib.sha256(c.encode("utf-8")).hexdigest(),
+                    sparse_vecs[j], token_counts[j])
+                cur.execute(sql, params)
         stored += len(embeddings)
         # Report every batch to on_progress (smooth 30% -> 95% progress); only
         # print to the CLI on the throttled schedule to avoid log spam.
@@ -221,11 +378,17 @@ def ingest_file(path: str, title: str | None = None, progress=print,
         _report(progress, on_progress, "embedding", pct, msg)
 
     _report(progress, on_progress, "done", 100, f"  + {title}: {stored} chunks stored")
-    return doc_id, stored
+
+    # New content can make cached reranked chunk lists stale (chunk ids change),
+    # so drop the retrieval cache and let popular queries re-run against fresh
+    # data.
+    retrieval.clear_retrieval_cache()
+    return doc_id, stored, {"mode": "ingested"}
 
 
 def ingest_path(path: str, title: str | None = None, progress=print,
-                skip_duplicates: bool = True, collection: str = "default") -> tuple[int, int]:
+                skip_duplicates: bool = True, collection: str = "default",
+                update_existing: bool = False, user_id: str | None = None) -> tuple[int, int]:
     """Ingest a file OR every supported file inside a directory."""
     if os.path.isdir(path):
         total_docs = total_chunks = 0
@@ -233,12 +396,18 @@ def ingest_path(path: str, title: str | None = None, progress=print,
             for fname in sorted(files):
                 fp = os.path.join(root, fname)
                 if os.path.splitext(fname)[1].lower() in LOADERS:
-                    doc_id, n = ingest_file(fp, title=fname, progress=progress,
-                                            skip_duplicates=skip_duplicates,
-                                            collection=collection)
+                    doc_id, n, _info = ingest_file(fp, title=fname, progress=progress,
+                                                   skip_duplicates=skip_duplicates,
+                                                   collection=collection,
+                                                   update_existing=update_existing,
+                                                   user_id=user_id)
                     if n > 0:
                         total_docs += 1
                     total_chunks += n
         return total_docs, total_chunks
-    return ingest_file(path, title=title, progress=progress,
-                       skip_duplicates=skip_duplicates, collection=collection)
+    doc_id, n, _info = ingest_file(path, title=title, progress=progress,
+                                   skip_duplicates=skip_duplicates,
+                                   collection=collection,
+                                   update_existing=update_existing,
+                                   user_id=user_id)
+    return doc_id, n

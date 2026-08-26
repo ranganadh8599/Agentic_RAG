@@ -6,15 +6,19 @@
 # Run:  uvicorn api:app --reload --port 8000
 
 import json
+import logging
 import os
 import tempfile
+import time
 import uuid
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+import logging_config
 from agents import OrchestratorAgent
 from config import settings
 import db
@@ -22,7 +26,18 @@ import ingest
 import memory
 import mongo
 
-app = FastAPI(title="Agentic RAG", version="0.1.0")
+log = logging.getLogger("api")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logging_config.setup_logging()
+    log.info("🚀 Server started")
+    yield
+    log.info("🛑 Server stopped")
+
+
+app = FastAPI(title="Agentic RAG", version="0.1.0", lifespan=lifespan)
 orchestrator = OrchestratorAgent()
 
 # Serve the web UI.
@@ -156,7 +171,11 @@ def _progress_state(upload_id: str) -> dict:
 @app.post("/ingest")
 def ingest_endpoint(file: UploadFile = File(...), title: str | None = Form(None),
                     collection: str = Form("default"),
-                    upload_id: str | None = Query(None)):
+                    upload_id: str | None = Query(None),
+                    update: bool = Query(False, description="delta-update an existing "
+                        "doc: reuse unchanged chunks, embed only changed ones"),
+                    user_id: str | None = Form(None, description="owner of the doc "
+                        "(used by metadata filtering)")):
     # Use the real uploaded filename as the document title (not the temp name).
     real_name = file.filename or "upload"
     suffix = os.path.splitext(real_name)[1] or ".txt"
@@ -188,15 +207,23 @@ def ingest_endpoint(file: UploadFile = File(...), title: str | None = Form(None)
             if upload_id:
                 UPLOAD_PROGRESS[uid] = {**p, "status": "running", "file": real_name}
 
-        doc_id, n = ingest.ingest_file(tmp_path, title=title or real_name,
-                                       collection=collection or "default",
-                                       on_progress=on_progress)
-        # ingest_file returns (existing_id, 0) when the doc was skipped by the
-        # duplicate-name check, and (0, 0) when the file had no extractable text.
-        skipped = (n == 0 and doc_id > 0)
+        doc_id, n, info = ingest.ingest_file(tmp_path, title=title or real_name,
+                                             collection=collection or "default",
+                                             on_progress=on_progress,
+                                             update_existing=update,
+                                             user_id=user_id)
+        # info["mode"] distinguishes: "ingested" (fresh), "updated" (delta
+        # update — only changed chunks embedded), "skipped" (duplicate name),
+        # "empty" (no extractable text).
+        mode = info.get("mode", "ingested")
         resp = {"document_id": doc_id, "chunks": n, "filename": real_name,
-                "skipped": skipped, "collection": collection or "default"}
-        if n == 0 and not skipped:
+                "collection": collection or "default",
+                "skipped": mode == "skipped",
+                "updated": mode == "updated"}
+        if mode == "updated":
+            resp["reused"] = info.get("reused", 0)
+            resp["removed"] = info.get("removed", 0)
+        if mode == "empty":
             resp["note"] = "no extractable content"
         if upload_id:
             UPLOAD_PROGRESS[uid] = {"percent": 100, "phase": "done",
@@ -237,6 +264,8 @@ class ChatRequest(BaseModel):
     stream: bool = False
     conversation_id: str | None = None
     collection: str | None = None
+    # Optional metadata filter: {user_id, date_from, date_to, tags, tags_mode}.
+    filters: dict | None = None
 
 
 class RegisterRequest(BaseModel):
@@ -344,6 +373,16 @@ def conversation_delete(cid: str, request: Request):
     return {"deleted": cid}
 
 
+def _tracked_stream(events, conv: str | None = None):
+    """Yield orchestration events, logging when the stream has fully finished."""
+    t0 = time.perf_counter()
+    try:
+        for ev in events:
+            yield ev
+    finally:
+        log.info("✅ Stream finished | conv=%s | %.1fs", conv, time.perf_counter() - t0)
+
+
 def _sse(model: str, events, conv: str | None = None):
     """Wrap orchestration events into OpenAI chat.completion.chunk SSE lines."""
     yield f'data: {json.dumps({"id": "chatcmpl-agenticrag", "object": "chat.completion.chunk", "model": model, "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}]})}\n\n'
@@ -352,6 +391,11 @@ def _sse(model: str, events, conv: str | None = None):
             payload = {"id": "chatcmpl-agenticrag", "object": "chat.completion.chunk",
                        "model": model, "choices": [{"index": 0,
                        "delta": {"content": ev["delta"]}, "finish_reason": None}]}
+            yield f"data: {json.dumps(payload)}\n\n"
+        elif ev["type"] == "status":
+            payload = {"id": "chatcmpl-agenticrag", "object": "chat.completion.chunk",
+                       "model": model, "choices": [{"index": 0, "delta": {},
+                       "finish_reason": None}], "status": ev["status"]}
             yield f"data: {json.dumps(payload)}\n\n"
         elif ev["type"] == "sources":
             final = {"id": "chatcmpl-agenticrag", "object": "chat.completion.chunk",
@@ -371,6 +415,13 @@ def chat_endpoint(req: ChatRequest, request: Request):
     # Chat auth is optional: a valid bearer token scopes the chat to that user;
     # without one the chat still works but is not saved to any user's history.
     user = mongo.user_from_token(_bearer(request))
+    # Cache scope: admins and anonymous users share the global/shared cache
+    # bucket; regular users get their own per-user cache so their private
+    # uploads and related cached answers never leak across accounts.
+    cache_scope = None if (not user or user.get("is_admin")) else user["id"]
+    log.info("▶️  User query | user=%s stream=%s collection=%s filters=%s | %r",
+             (user or {}).get("username"), req.stream, req.collection,
+             req.filters, query[:120])
     if req.conversation_id is not None:
         owner = memory.conversation_owner(req.conversation_id)
         if owner is None:
@@ -383,10 +434,19 @@ def chat_endpoint(req: ChatRequest, request: Request):
                                           user_id=user["id"] if user else None)
 
     if req.stream:
-        events = orchestrator.run_stream(query, conversation_id=conv, collection=req.collection)
-        return StreamingResponse(_sse(model, events, conv), media_type="text/event-stream")
+        events = orchestrator.run_stream(query, conversation_id=conv, collection=req.collection,
+                                         filters=req.filters,
+                                         user_id=cache_scope)
+        log.info("… streaming response | conv=%s", conv)
+        return StreamingResponse(_sse(model, _tracked_stream(events, conv), conv),
+                                 media_type="text/event-stream")
 
-    res = orchestrator.run(query, conversation_id=conv, collection=req.collection)
+    res = orchestrator.run(query, conversation_id=conv, collection=req.collection,
+                           filters=req.filters,
+                           user_id=cache_scope)
+    log.info("✅ Response sent | type=%s sources=%d chars=%d",
+             res.get("type"), len(res.get("sources") or []),
+             len(res.get("answer") or ""))
     return {
         "id": "chatcmpl-agenticrag",
         "object": "chat.completion",

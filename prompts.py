@@ -53,6 +53,34 @@ citations, do NOT invent facts, and do NOT claim to know which documents they
 have uploaded unless they are explicitly shown."""
 
 
+REWRITE_PROMPT = """You are a search-query rewriter for a RAG system. A user is
+having a multi-turn conversation with a document Q&A assistant.
+
+Here is the recent conversation history (most recent last):
+<history>
+{transcript}
+</history>
+
+And here is the user's LATEST question:
+<query>
+{query}
+</query>
+
+Your job: produce ONE standalone search query that captures the user's actual
+intent, resolving any pronouns ("it", "they", "this", "the person"), ellipsis,
+or references that only make sense with the history (e.g. "what does it do?" ->
+"What does RAGAS do?"). Preserve any technical terms, names, codes or acronyms
+from the history EXACTLY.
+
+Rules:
+- If the latest question is ALREADY self-contained and would make sense with no
+  history (a clear subject, no dangling pronouns/references), return it
+  UNCHANGED, verbatim.
+- Otherwise rewrite it into a clear, standalone question/query.
+- Do NOT answer the question. Do NOT add commentary, quotes, or explanations.
+- Output ONLY the final query text on a single line."""
+
+
 CRITIC_PROMPT = """You are a QA critic checking whether an answer is fully grounded in the provided context.
 
 Check BOTH of these:
@@ -66,5 +94,15 @@ Check BOTH of these:
 Reply with JSON only, in this exact shape:
 {{"verdict": "pass" or "fail", "issues": ["short description of each problem"]}}"""
 
-EXPANSION_PROMPT = """Rewrite the user's search query into better search terms for finding text inside documents.
-Return 2-4 short keyword or phrase queries, one per line, no numbering, no quotes."""
+EXPANSION_PROMPT = """You are helping a retrieval system find MORE matching documents for a search query.
+
+Given the user's query, generate {n} query variants that keep the SAME meaning but are worded differently, so semantic search surfaces chunks the original phrasing missed. Mix the styles:
+- Natural rephrasings: synonyms, different grammar or word order, but identical meaning/intent.
+- Alternate phrasings a user might type: question vs statement form, different focus/emphasis.
+- Keyword / exact-term forms: key nouns, acronyms, codes, and distinctive terms (useful for exact-match search).
+
+Rules:
+- Preserve the EXACT meaning and answer intent. Do NOT broaden, narrow, or change the topic.
+- One variant per line.
+- No numbering, no bullets, no quotes, no explanations.
+- Do NOT repeat the original query."""
