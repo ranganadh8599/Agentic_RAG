@@ -179,15 +179,30 @@ Everything is provider-agnostic: all LLM and embedding calls go through
 - **Noise-free** — litellm / huggingface / transformers logs are suppressed so
   only your pipeline shows.
 
-### 📊 Evaluation & quality
+### 📊 Evaluation & quality (opt-in, real models)
 
-- **`eval_ragas.py`** — end-to-end **RAGAS** evaluation (faithfulness, answer
-  relevancy, context precision/recall, plus custom citation-integrity & answer-
-  accuracy metrics) against judged datasets.
-- **`recall_check.py`** — **recall@k + MRR** regression harness ("recall is the
-  north star"); exits non-zero below `--min-recall`.
-- **`benchmark_rerank.py`** — candidate-pool latency/quality sweep + FTS A/B
-  (`--ab fts`) with recall@k/MRR.
+RAG-quality evaluation is kept separate from the correctness suite and run on
+demand with real models:
+
+- **RAGAS generation metrics** — faithfulness, answer relevancy, context
+  precision/recall scored over `tests/evaluation/datasets/rag_eval.json`
+  (`tests/evaluation/generation/`).
+- **Retrieval recall@k + MRR** — the "north star" regression harness with a
+  quality floor (`tests/evaluation/retrieval/`).
+- **Citation accuracy** — `tests/evaluation/citations/`.
+- **Latency benchmarks** — P50/P95 per query + stage breakdown
+  (`tests/evaluation/benchmarks/`).
+
+Run all of them with:
+
+```powershell
+python -m pytest -m evaluation
+```
+
+(Requires real `EMBEDDING_MODEL` / `LLM_MODEL` in `.env` and the corpus
+ingested. Standalone scripts for deeper runs — candidate-pool sweeps and FTS
+A/B — remain at the repo root as `benchmark_rerank.py`, `recall_check.py`, and
+`eval_ragas.py`.)
 
 ### 🧠 Multi-agent & citation integrity
 
@@ -411,7 +426,7 @@ for previously ingested files.
 
 ## Configuration (.env)
 
-All tunables live in `config.py` and are loaded from environment variables
+All tunables live in `app/core/config.py` and are loaded from environment variables
 (see `.env.example` for the full annotated list). Core knobs: `EMBEDDING_MODEL`,
 `LLM_MODEL`, `VISION_MODEL`, `USE_ASYMMETRIC_PREFIX`, `CHUNK_SIZE`, `CHUNK_OVERLAP`,
 `TOP_K`, `USE_QUERY_EXPANSION`, `SEMANTIC_CACHE_THRESHOLD`, `RELEVANCE_FLOOR`,
@@ -489,23 +504,28 @@ agentic-rag/
 │   │   └── query_rewriter.py, cache.py, filters.py
 │   ├── ingestion/    # pipeline, loaders, chunking
 │   ├── llm/          # client, embeddings, prompts
-│   ├── database/     # Postgres (db.py) + Mongo persistence
+│   ├── database/     # postgres.py (Postgres + pgvector) + mongo.py
 │   ├── memory/       # conversation memory
 │   ├── citation/     # validator / sanitizer / formatter
-│   ├── core/         # config, logging, exceptions
+│   ├── core/         # config, logging
 │   └── schemas/      # chat / users request models
-├── cli/main.py    # ingest / ask / chat / stats / admin / reset
-├── db.py          # Postgres + pgvector schema and vector helpers
-├── mongo.py       # MongoDB users, sessions, conversations, messages
-├── llm.py         # unified multi-provider LLM + embeddings (with mock)
-├── ingest.py      # ingestion pipeline
-├── loaders.py     # PDF / image (vision) / text loaders
-├── memory.py      # conversation memory (re-exports mongo)
-├── eval_ragas.py  # RAGAS end-to-end evaluation (faithfulness, relevancy, ...)
-├── recall_check.py  # recall@k + MRR regression harness
-├── benchmark_rerank.py  # rerank candidate-pool benchmark + FTS A/B
+├── cli/
+│   └── main.py    # ingest / ask / chat / stats / admin / reset
+├── tests/
+│   ├── unit/         # component correctness (mock LLM/embeddings)
+│   │   └── api/      # HTTP behavior (FastAPI TestClient)
+│   ├── integration/  # real Postgres + FTS component interaction
+│   ├── e2e/          # user workflows (upload → ask, multi-turn, isolation)
+│   ├── architecture/ # dependency-contract tests
+│   └── evaluation/   # opt-in RAG quality (retrieval / generation / citations / benchmarks)
 ├── static/        # web UI (HTML / CSS / JS — Markdown-rendered chat)
-└── screenshots/   # UI screenshots used in this README
+├── screenshots/   # UI screenshots used in this README
+├── Dockerfile
+├── docker-compose.yml
+├── docker-compose.gpu.yml
+├── requirements.txt
+├── pyproject.toml   # pytest configuration
+└── .env.example
 ```
 
 ## Testing
