@@ -14,6 +14,15 @@ class Settings:
         "DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/agentic_rag"
     )
 
+    # --- Connection pooling (psycopg_pool) ---
+    # db.get_conn() checks a connection out of a shared pool instead of opening
+    # a fresh TCP connection + auth per query (which bottlenecked under load).
+    DB_POOL_MIN_SIZE: int = int(os.getenv("DB_POOL_MIN_SIZE", "1"))
+    DB_POOL_MAX_SIZE: int = int(os.getenv("DB_POOL_MAX_SIZE", "10"))
+    # Seconds get_conn() waits for a free pooled connection before falling back
+    # to a one-off direct connection.
+    DB_POOL_TIMEOUT: float = float(os.getenv("DB_POOL_TIMEOUT", "5"))
+
     # --- Embeddings (any litellm-supported model) ---
     # Examples:
     #   "openai/text-embedding-3-small"     (1536 dims, needs OPENAI_API_KEY)
@@ -105,6 +114,11 @@ class Settings:
 
     # --- Agents / citations ---
     MAX_CRITIC_ROUNDS: int = int(os.getenv("MAX_CRITIC_ROUNDS", "2"))
+    # Exact-query LRU cache for the router's LLM classification: repeated
+    # questions skip the router's full LLM round-trip (retrieval/semantic
+    # caches already short-circuit repeats, but routing runs before them).
+    # Temperature-0 classification is deterministic, so caching is safe.
+    ROUTER_CACHE_SIZE: int = int(os.getenv("ROUTER_CACHE_SIZE", "256"))
     ROUTER_MAX_TOKENS: int = int(os.getenv("ROUTER_MAX_TOKENS", "100"))
     CRITIC_MAX_TOKENS: int = int(os.getenv("CRITIC_MAX_TOKENS", "300"))
     # A "padding" citation is pruned when its chunk shares less than this
@@ -208,6 +222,25 @@ class Settings:
     MONGO_URI: str = os.getenv("MONGO_URI", "mongodb://127.0.0.1:27017")
     MONGO_DB: str = os.getenv("MONGO_DB", "agentic_rag")
     SESSION_TTL_SECONDS: int = int(os.getenv("SESSION_TTL_SECONDS", "2592000"))  # 30 days
+
+    # --- Auth rate limiting ---
+    # Max login/register attempts per client IP within AUTH_RATE_WINDOW seconds
+    # before the endpoint returns 429 (basic brute-force throttling). NOTE: the
+    # window is per-process; under `uvicorn --workers N` each worker keeps its
+    # own counter, so the effective limit is N x the configured value.
+    AUTH_RATE_LIMIT: int = int(os.getenv("AUTH_RATE_LIMIT", "10"))
+    AUTH_RATE_WINDOW: int = int(os.getenv("AUTH_RATE_WINDOW", "60"))
+
+    # --- Web / API ---
+    # CORS allowed origins (comma-separated). The web UI is served same-origin
+    # (via /static), so this only matters for a separate frontend or browser-
+    # based OpenAI-compatible clients. Auth uses bearer tokens (NOT cookies),
+    # so allow_credentials stays off and "*" is acceptable; restrict it to your
+    # frontend origin(s) in production.
+    CORS_ORIGINS: str = os.getenv("CORS_ORIGINS", "*")
+    # Hard cap on ?limit= for list endpoints — stops one request from pulling
+    # the whole table into memory. Clients may request up to this many rows.
+    PAGE_LIMIT_CAP: int = int(os.getenv("PAGE_LIMIT_CAP", "1000"))
 
 
 settings = Settings()

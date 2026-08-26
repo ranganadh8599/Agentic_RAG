@@ -10,6 +10,7 @@ import json
 import logging
 import re
 import time
+from functools import lru_cache
 
 from config import settings
 import db
@@ -21,6 +22,18 @@ import memory
 from logging_config import fmt_table
 
 log = logging.getLogger("agents")
+
+
+class CriticUnavailableError(Exception):
+    """Raised when the Critic agent cannot run (LLM error / malformed response).
+
+    The orchestrator treats this as "grounding could NOT be verified": the
+    answer is still delivered (a transient LLM outage must not brick chat) but
+    it is explicitly flagged as UNVERIFIED in logs and in the API/UI response,
+    instead of the old behaviour of silently treating a failed critic as a pass.
+    The deterministic citation backstop (sanitize_citations) still runs in
+    every case."""
+
 
 # ---- citation robustness helpers -------------------------------------------
 # Deterministic post-processing that keeps citations honest:
@@ -172,24 +185,32 @@ def _is_greeting(query: str) -> bool:
 
 class RouterAgent:
     def classify(self, query: str) -> str:
-        try:
-            ans = chat_text(
-                [{"role": "user",
-                  "content": f"{ROUTER_PROMPT}\n\nQuery: {query}"}],
-                temperature=0.0,
-                max_tokens=settings.ROUTER_MAX_TOKENS,
-            ).strip().lower()
-            if "vision" in ans:
-                return "vision"
-            if "summary" in ans:
-                return "summary"
-            if "greeting" in ans:
-                return "greeting"
-            if "general" in ans:
-                return "general"
-            return "rag"
-        except Exception:  # noqa: BLE001
-            return "rag"
+        """Classify the query type. Wrapped in an exact-query LRU cache so a
+        repeated question skips the router's full LLM round-trip — routing runs
+        before the retrieval/semantic caches can short-circuit a repeat."""
+        return _router_classify(query)
+
+
+@lru_cache(maxsize=settings.ROUTER_CACHE_SIZE)
+def _router_classify(query: str) -> str:
+    try:
+        ans = chat_text(
+            [{"role": "user",
+              "content": f"{ROUTER_PROMPT}\n\nQuery: {query}"}],
+            temperature=0.0,
+            max_tokens=settings.ROUTER_MAX_TOKENS,
+        ).strip().lower()
+        if "vision" in ans:
+            return "vision"
+        if "summary" in ans:
+            return "summary"
+        if "greeting" in ans:
+            return "greeting"
+        if "general" in ans:
+            return "general"
+        return "rag"
+    except Exception:  # noqa: BLE001
+        return "rag"
 
 
 class RetrieverAgent:
@@ -251,8 +272,12 @@ class CriticAgent:
             verdict = str(data.get("verdict", "fail")).lower()
             issues = data.get("issues") or []
             return verdict == "pass", issues
-        except Exception:  # noqa: BLE001
-            return True, []
+        except Exception as exc:  # noqa: BLE001
+            # Fail CLOSED: a critic that cannot run must never report "pass".
+            # Surface the failure loudly so the orchestrator can flag the
+            # answer as unverified rather than claiming it was grounded.
+            log.error("Critic review failed (grounding NOT verified): %s", exc)
+            raise CriticUnavailableError("critic could not run") from exc
 
 
 class OrchestratorAgent:
@@ -435,6 +460,9 @@ class OrchestratorAgent:
         log.info("🧭 Query type: %s | user=%s collection=%s filters=%s",
                  kind, user_id, collection, bool(filters))
         self._persist_user(conversation_id, query, q_emb)
+        # True when the Critic agent could not run, so this answer was delivered
+        # WITHOUT grounding verification (never silently treated as verified).
+        unverified = False
 
         result = self.retriever.run(retrieval_query, top_k=top_k,
                                     collection=collection, filters=filters,
@@ -476,9 +504,16 @@ class OrchestratorAgent:
                 f"[{r['citation']}] {r['content']}" for r in blocks)
             answer = self.writer.run(retrieval_query, blocks, memory_text)
 
-            # Critic feedback loop.
+            # Critic feedback loop. If the critic cannot run, the answer is
+            # delivered but flagged unverified (fail CLOSED, never silent pass).
             for _ in range(settings.MAX_CRITIC_ROUNDS):
-                ok, issues = self.critic.review(retrieval_query, context_text, answer)
+                try:
+                    ok, issues = self.critic.review(retrieval_query, context_text, answer)
+                except CriticUnavailableError:
+                    log.error("🔴 Critic unavailable — answer delivered WITHOUT "
+                              "grounding verification")
+                    unverified = True
+                    break
                 if ok or not issues:
                     break
                 answer = self.writer.run(retrieval_query, blocks, memory_text, feedback=issues)
@@ -497,7 +532,8 @@ class OrchestratorAgent:
                   (s.get("snippet") or "")[:48]) for s in sources]))
         log.info("✅ Answer ready: %d chars, %d sources | total %.1fs",
                  len(answer or ""), len(sources or []), time.perf_counter() - _t0)
-        return {"answer": answer, "sources": sources, "type": kind}
+        return {"answer": answer, "sources": sources, "type": kind,
+                "unverified": unverified}
 
     # -- streaming --------------------------------------------------------------
 
@@ -507,6 +543,9 @@ class OrchestratorAgent:
         """Generator yielding events:
         {"type": "content", "delta": str} and finally {"type": "sources", ...}"""
         _t0 = time.perf_counter()
+        # True when the Critic agent could not run, so this answer is delivered
+        # WITHOUT grounding verification (never silently treated as verified).
+        unverified = False
         # Greetings short-circuit: no embedding, no router, no RAG retrieval.
         if _is_greeting(query):
             log.info("👋 Greeting reply (no RAG) | conv=%s", conversation_id)
@@ -571,15 +610,26 @@ class OrchestratorAgent:
                 full = full_so_far
                 if delta:
                     yield {"type": "content", "delta": delta}
-            # critic loop (no streaming for the rewrite pass)
+            # critic loop (no streaming for the rewrite pass). If the critic
+            # cannot run, flag the answer as unverified (fail CLOSED).
             context_text = "\n".join(f"[{r['citation']}] {r['content']}" for r in blocks)
             answer = full
             for _ in range(settings.MAX_CRITIC_ROUNDS):
-                ok, issues = self.critic.review(retrieval_query, context_text, answer)
+                try:
+                    ok, issues = self.critic.review(retrieval_query, context_text, answer)
+                except CriticUnavailableError:
+                    log.error("🔴 Critic unavailable — answer delivered WITHOUT "
+                              "grounding verification")
+                    unverified = True
+                    break
                 if ok or not issues:
                     break
                 answer = self.writer.run(retrieval_query, blocks, memory_text, feedback=issues)
-                yield {"type": "content", "delta": f"\n[revised] {answer}"}
+                # The revision REPLACES the flawed first draft: tell the client
+                # to drop everything streamed so far, then send the new text —
+                # the user must never see draft + revision concatenated.
+                yield {"type": "replace"}
+                yield {"type": "content", "delta": answer}
             sources, answer = self._cited_sources(answer, blocks)
 
         self._persist(conversation_id, query, answer, q_emb, result.get("cached"),
@@ -595,4 +645,6 @@ class OrchestratorAgent:
                   (s.get("snippet") or "")[:48]) for s in sources]))
         log.info("✅ Answer ready: %d chars, %d sources | total %.1fs",
                  len(answer or ""), len(sources or []), time.perf_counter() - _t0)
+        if unverified:
+            yield {"type": "unverified"}
         yield {"type": "sources", "sources": sources}

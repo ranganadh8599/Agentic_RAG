@@ -211,6 +211,10 @@ Everything is provider-agnostic: all LLM and embedding calls go through
 - **PostgreSQL storage** — `documents`, `chunks`, `conversations`, `messages`,
   and `semantic_cache` tables. Uses **pgvector** (HNSW indexes) when available,
   with an automatic JSONB + Python-cosine fallback.
+- **Connection pooling** — `db.get_conn()` checks connections out of a shared
+  `psycopg_pool` pool (reusing TCP connections) instead of opening a fresh
+  connection per query; falls back to per-call connections if the package is
+  missing (`DB_POOL_MIN_SIZE` / `DB_POOL_MAX_SIZE` / `DB_POOL_TIMEOUT`).
 - **pgvector HNSW (halfvec)** — embedding columns over 2000 dims (e.g.
   gemini-embedding-2 at 3072) are stored as `halfvec` so HNSW approximate indexes
   work (pgvector's `vector` HNSW caps at 2000 dims). `init_db()` migrates existing
@@ -380,12 +384,16 @@ for previously ingested files.
 > **Collections API** — `GET /collections` lists tables with doc/chunk counts;
 > `POST /collections` creates one. Ingest accepts `collection` (form field), the
 > chat API accepts `collection` (JSON field), and `GET /documents?collection=`
-> filters the document list.
+> filters the document list. List endpoints (`/collections`, `/documents`,
+> `/conversations`) accept `?limit=` / `?offset=` for pagination (`limit` capped
+> at `PAGE_LIMIT_CAP`, default 1000; omitted = unbounded, UI unchanged).
 >
 > **Users & history API (real auth)** —
 > - `POST /api/register` `{username, password, display_name}` — create an account
 >   (`409` if the username is taken).
 > - `POST /api/login` `{username, password}` — returns `{token, user}`.
+>   Login/register are rate-limited per client IP — `429` after `AUTH_RATE_LIMIT`
+>   attempts within `AUTH_RATE_WINDOW` seconds (reset on success).
 > - `POST /api/logout` — invalidates the current token.
 > - `GET /api/me` — validates a token, returns the user.
 > - `POST /api/password` `{current_password, new_password}` (Bearer token) —
@@ -416,7 +424,18 @@ Also configurable (defaults shown): `MAX_CRITIC_ROUNDS` (2), `ROUTER_MAX_TOKENS`
 `KEYWORD_TITLE_BOOST` (2.0), `FILENAME_MATCH_SCORE` (3.0), `RETRIEVAL_MULTIPLIER`
 (2), `STRUCTURED_KEYWORDS` (comma-separated resume/form names), `EMBED_BATCH_SIZE`
 (32), `MEMORY_RECENT_K` (8), `MEMORY_RELEVANT_K` (4), `IMAGE_JPEG_QUALITY` (85),
-`VISION_SUMMARY_MAX_TOKENS` (500), `HNSW_VECTOR_DIM_LIMIT` (2000).
+`VISION_SUMMARY_MAX_TOKENS` (500), `HNSW_VECTOR_DIM_LIMIT` (2000),
+`ROUTER_CACHE_SIZE` (256).
+
+**Connection pooling:** `DB_POOL_MIN_SIZE` (1), `DB_POOL_MAX_SIZE` (10),
+`DB_POOL_TIMEOUT` (5) — `db.get_conn()` checks connections out of a shared
+`psycopg_pool` pool, reusing TCP connections instead of a fresh handshake per
+query (falls back to per-call connections if the package is missing).
+**Auth rate limiting:** `AUTH_RATE_LIMIT` (10) login/register attempts per
+`AUTH_RATE_WINDOW` (60) seconds per client IP → `429` (per-process counter, so
+`N` workers = `N×` the limit). **Web/API:** `CORS_ORIGINS` (`*`, comma-separated;
+bearer auth keeps cookies off, so `*` is acceptable) and `PAGE_LIMIT_CAP`
+(1000) — the hard cap on `?limit=` for list endpoints.
 
 **Two-stage retrieval & reranking:** `USE_RERANKER` (1), `RERANKER_MODEL`
 (`Qwen/Qwen3-Reranker-0.6B`), `RERANKER_CANDIDATES` (20), `RERANKER_BATCH_SIZE`

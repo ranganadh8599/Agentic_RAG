@@ -11,9 +11,12 @@ import os
 import tempfile
 import time
 import uuid
+from collections import defaultdict, deque
 from contextlib import asynccontextmanager
+from threading import Lock
 
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -40,10 +43,26 @@ async def lifespan(app: FastAPI):
     log.info("🚀 Server started")
     yield
     log.info("🛑 Server stopped")
+    db.close_pool()
 
 
 app = FastAPI(title="Agentic RAG", version="0.1.0", lifespan=lifespan)
 orchestrator = OrchestratorAgent()
+
+# CORS: the web UI is served same-origin, so no CORS headers are needed for it.
+# When a separate frontend or a browser-based OpenAI-compatible client calls the
+# API, allow the configured origin(s) (CORS_ORIGINS, comma-separated, default
+# "*"). Auth uses bearer tokens (not cookies), so allow_credentials stays off
+# and a browser will never auto-attach credentials to a cross-origin request.
+_cors_origins = [o.strip() for o in settings.CORS_ORIGINS.split(",") if o.strip()]
+if _cors_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_cors_origins,
+        allow_methods=["*"],
+        allow_headers=["*"],
+        allow_credentials=False,
+    )
 
 # Serve the web UI.
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
@@ -60,6 +79,18 @@ def _count(table: str) -> int:
     with db.get_conn().cursor() as cur:
         cur.execute(f"SELECT count(*) AS n FROM {table}")
         return cur.fetchone()["n"]
+
+
+def _page(limit: int | None, offset: int | None) -> tuple[int | None, int]:
+    """Normalize optional limit/offset for list endpoints.
+
+    Returns (limit, offset). limit=None keeps the existing unbounded behaviour
+    (the UI sidebar lists everything); when a limit is given it is clamped to
+    PAGE_LIMIT_CAP so a single request can't pull the whole table into memory."""
+    offset = max(offset or 0, 0)
+    if limit is None or limit <= 0:
+        return None, offset
+    return min(int(limit), settings.PAGE_LIMIT_CAP), offset
 
 
 # ---------------------------------------------------------------------------
@@ -88,9 +119,11 @@ def app_config():
 
 
 @app.get("/documents")
-def documents(collection: str | None = None):
+def documents(collection: str | None = None,
+              limit: int | None = Query(None, ge=1),
+              offset: int | None = Query(None, ge=0)):
     """List ingested documents with chunk counts (for the UI sidebar).
-    Optionally filter to a single collection."""
+    Optionally filter to a single collection and paginate with limit/offset."""
     coll_filter = ""
     params: list = []
     if collection:
@@ -99,24 +132,28 @@ def documents(collection: str | None = None):
             return []
         coll_filter = "WHERE d.collection_id = %s"
         params = [cid]
+    page_limit, page_offset = _page(limit, offset)
+    sql = f"""SELECT d.id, d.title, d.source_type, d.source_path, d.created_at,
+                    c2.name AS collection, count(c.id) AS chunks
+             FROM documents d
+             LEFT JOIN chunks c ON c.document_id = d.id
+             LEFT JOIN collections c2 ON c2.id = d.collection_id
+             {coll_filter}
+             GROUP BY d.id, c2.name ORDER BY d.id DESC"""
+    if page_limit is not None:
+        sql += " LIMIT %s OFFSET %s"
+        params += [page_limit, page_offset]
     with db.get_conn().cursor() as cur:
-        cur.execute(
-            f"""SELECT d.id, d.title, d.source_type, d.source_path, d.created_at,
-                      c2.name AS collection, count(c.id) AS chunks
-               FROM documents d
-               LEFT JOIN chunks c ON c.document_id = d.id
-               LEFT JOIN collections c2 ON c2.id = d.collection_id
-               {coll_filter}
-               GROUP BY d.id, c2.name ORDER BY d.id DESC""",
-            params,
-        )
+        cur.execute(sql, params or None)
         return cur.fetchall()
 
 
 @app.get("/collections")
-def collections():
-    """List all collections with doc/chunk counts."""
-    return db.list_collections()
+def collections(limit: int | None = Query(None, ge=1),
+                offset: int | None = Query(None, ge=0)):
+    """List all collections with doc/chunk counts (optionally paginated)."""
+    page_limit, page_offset = _page(limit, offset)
+    return db.list_collections(page_limit, page_offset)
 
 
 class CollectionRequest(BaseModel):
@@ -151,20 +188,29 @@ def get_image(image_id: int):
 
 # In-memory upload progress trackers keyed by client-supplied upload_id.
 # Written from the ingest threadpool thread, read by the progress poll endpoint
-# on the event loop thread — plain dict get/set is fine under the GIL here.
+# on the event loop thread. A lock guards the read+prune compound operation;
+# individual dict get/set is atomic under the GIL.
+#
+# LIMITATION: this is per-process state. Under `uvicorn --workers N` (or
+# multiple replicas) the ingest may run in a different worker than the poll
+# request, so progress can come back stale/empty. That is fine for the default
+# single-worker deployment; for multi-worker setups, move progress to a shared
+# store (e.g. Redis or a progress table in Postgres) and read from there.
 UPLOAD_PROGRESS: dict[str, dict] = {}
+_progress_lock = Lock()
 
 
 def _progress_state(upload_id: str) -> dict:
     # Bounded: never keep more than a few hundred finished trackers around.
-    if len(UPLOAD_PROGRESS) > 300:
-        stale = [k for k, v in UPLOAD_PROGRESS.items()
-                 if v.get("status") in ("done", "error")][:len(UPLOAD_PROGRESS) - 50]
-        for k in stale:
-            UPLOAD_PROGRESS.pop(k, None)
-    return UPLOAD_PROGRESS.get(upload_id, {
-        "percent": 0, "phase": "starting", "message": "Starting…", "status": "running",
-    })
+    with _progress_lock:
+        if len(UPLOAD_PROGRESS) > 300:
+            stale = [k for k, v in UPLOAD_PROGRESS.items()
+                     if v.get("status") in ("done", "error")][:len(UPLOAD_PROGRESS) - 50]
+            for k in stale:
+                UPLOAD_PROGRESS.pop(k, None)
+        return UPLOAD_PROGRESS.get(upload_id, {
+            "percent": 0, "phase": "starting", "message": "Starting…", "status": "running",
+        })
 
 
 @app.post("/ingest")
@@ -308,6 +354,55 @@ def _bearer(request: Request) -> str | None:
     return None
 
 
+# --- Auth rate limiting ------------------------------------------------------
+# Fixed-window throttle per client IP for the (unauthenticated) /api/login and
+# /api/register endpoints, so a password can't be brute-forced at full speed.
+# Attempts are counted at entry; a successful login/register clears the window
+# for that IP. Like UPLOAD_PROGRESS this is per-process — fine for the default
+# single worker; for strict multi-worker enforcement front with a reverse proxy
+# rate limit (nginx limit_req, etc.).
+_auth_attempts: dict[str, deque[float]] = defaultdict(deque)
+_auth_lock = Lock()
+
+
+def _client_ip(request: Request) -> str:
+    """Best-effort client IP, honoring X-Forwarded-For when behind a proxy."""
+    fwd = request.headers.get("x-forwarded-for", "")
+    if fwd:
+        return fwd.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def _prune_auth_attempts():
+    # Bound memory: drop empty buckets once the map grows large.
+    if len(_auth_attempts) < 5000:
+        return
+    for k in [k for k, dq in _auth_attempts.items() if not dq]:
+        _auth_attempts.pop(k, None)
+
+
+def _auth_rate_limit(request: Request) -> None:
+    """Raise 429 if this client has made too many login/register attempts."""
+    ip = _client_ip(request)
+    now = time.monotonic()
+    with _auth_lock:
+        dq = _auth_attempts[ip]
+        while dq and now - dq[0] > settings.AUTH_RATE_WINDOW:
+            dq.popleft()
+        _prune_auth_attempts()
+        if len(dq) >= settings.AUTH_RATE_LIMIT:
+            raise HTTPException(status_code=429,
+                                detail="too many attempts — try again later")
+        dq.append(now)
+
+
+def _auth_rate_clear(request: Request) -> None:
+    """Reset the attempt window for this client on a successful login/register."""
+    ip = _client_ip(request)
+    with _auth_lock:
+        _auth_attempts.pop(ip, None)
+
+
 def _auth_user(request: Request) -> dict:
     """Resolve the authenticated user from the token (401 if missing/invalid)."""
     user = mongo.user_from_token(_bearer(request))
@@ -317,18 +412,23 @@ def _auth_user(request: Request) -> dict:
 
 
 @app.post("/api/register")
-def register(req: RegisterRequest):
+def register(req: RegisterRequest, request: Request):
+    _auth_rate_limit(request)
     try:
-        return mongo.register_user(req.username, req.display_name, req.password)
+        res = mongo.register_user(req.username, req.display_name, req.password)
+        _auth_rate_clear(request)
+        return res
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
 
 
 @app.post("/api/login")
-def login(req: LoginRequest):
+def login(req: LoginRequest, request: Request):
+    _auth_rate_limit(request)
     res = mongo.login_user(req.username, req.password)
     if not res:
         raise HTTPException(status_code=401, detail="invalid username or password")
+    _auth_rate_clear(request)
     return res
 
 
@@ -359,9 +459,12 @@ def change_password(req: ChangePasswordRequest, request: Request):
 # ---------------------------------------------------------------------------
 
 @app.get("/conversations")
-def conversations(request: Request):
+def conversations(request: Request,
+                  limit: int | None = Query(None, ge=1),
+                  offset: int | None = Query(None, ge=0)):
     user = _auth_user(request)
-    return memory.get_conversations(user["id"])
+    page_limit, page_offset = _page(limit, offset)
+    return memory.get_conversations(user["id"], page_limit, page_offset)
 
 
 @app.get("/conversations/{cid}")
@@ -404,6 +507,20 @@ def _sse(model: str, events, conv: str | None = None):
             payload = {"id": "chatcmpl-agenticrag", "object": "chat.completion.chunk",
                        "model": model, "choices": [{"index": 0,
                        "delta": {"content": ev["delta"]}, "finish_reason": None}]}
+            yield f"data: {json.dumps(payload)}\n\n"
+        elif ev["type"] == "replace":
+            # Client signal: drop everything streamed so far (the Critic loop
+            # is replacing the flawed first draft, not appending to it).
+            payload = {"id": "chatcmpl-agenticrag", "object": "chat.completion.chunk",
+                       "model": model, "choices": [{"index": 0, "delta": {},
+                       "finish_reason": None}], "replace": True}
+            yield f"data: {json.dumps(payload)}\n\n"
+        elif ev["type"] == "unverified":
+            # Client signal: the Critic agent could not run, so the answer was
+            # delivered without grounding verification.
+            payload = {"id": "chatcmpl-agenticrag", "object": "chat.completion.chunk",
+                       "model": model, "choices": [{"index": 0, "delta": {},
+                       "finish_reason": None}], "unverified": True}
             yield f"data: {json.dumps(payload)}\n\n"
         elif ev["type"] == "status":
             payload = {"id": "chatcmpl-agenticrag", "object": "chat.completion.chunk",
@@ -478,6 +595,7 @@ def chat_endpoint(req: ChatRequest, request: Request):
                      "finish_reason": "stop"}],
         "sources": res["sources"],
         "type": res["type"],
+        "unverified": res.get("unverified", False),
         "conversation_id": conv,
         "collection": req.collection,
         "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},

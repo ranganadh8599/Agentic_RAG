@@ -594,6 +594,7 @@ async function sendMessage() {
 
   let answer = "";
   let sources = [];
+  let unverified = false;
 
   try {
     const resp = await fetch("/v1/chat/completions", {
@@ -628,6 +629,14 @@ async function sendMessage() {
             statusEl.textContent = ev.status;
             scrollBottom();
           }
+          if (ev.replace) {
+            // Critic revision: drop the flawed first draft and show only the
+            // replacement text (never draft + revision concatenated).
+            answer = "";
+            statusEl.remove();
+            cursor.remove();
+          }
+          if (ev.unverified) unverified = true;
           const delta = ev.choices && ev.choices[0] && ev.choices[0].delta && ev.choices[0].delta.content;
           if (delta) {
             statusEl.remove();
@@ -649,6 +658,14 @@ async function sendMessage() {
     statusEl.remove();
     cursor.remove();
     if (answer) renderAnswer(bubble, answer);
+    if (unverified && answer) {
+      // The Critic agent could not verify grounding for this answer — say so
+      // explicitly instead of presenting it as source-verified.
+      const note = document.createElement("div");
+      note.className = "unverified";
+      note.textContent = "⚠️ Grounding check unavailable — this answer was not verified against your documents.";
+      bubble.appendChild(note);
+    }
     renderSources(bubble.parentElement, sources);
     sending = false;
     sendBtn.disabled = false;
