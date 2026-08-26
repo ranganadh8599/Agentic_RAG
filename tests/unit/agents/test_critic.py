@@ -38,6 +38,16 @@ def test_review_malformed_json_raises(monkeypatch):
         CriticAgent().review("q", "context", "answer")
 
 
+def test_review_accepts_markdown_fenced_json(monkeypatch):
+    # Regression: Gemini wraps the JSON reply in ```json ... ``` fences; the
+    # critic must strip the fence instead of fail-closing on every real call.
+    fenced = '```json\n{"verdict": "pass", "issues": []}\n```'
+    monkeypatch.setattr("app.agents.critic.chat_text", _fake(fenced))
+    ok, issues = CriticAgent().review("q", "context", "answer")
+    assert ok is True
+    assert issues == []
+
+
 def test_review_llm_error_raises(monkeypatch):
     def boom(messages, **kw):
         raise RuntimeError("LLM down")

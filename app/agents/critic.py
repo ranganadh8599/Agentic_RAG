@@ -2,12 +2,26 @@
 
 import json
 import logging
+import re
 
 from app.core.config import settings
 from app.llm.client import chat_text
 from app.llm.prompts import CRITIC_PROMPT
 
 log = logging.getLogger("agents")
+
+
+def _parse_critic_json(resp: str) -> dict:
+    """Parse the critic's JSON reply, tolerating markdown code fences.
+
+    Some providers (e.g. Gemini) wrap the JSON reply in ```json ... ```
+    fences; a plain json.loads would fail-CLOSE on every call. Strip the
+    fence, then parse. Truly malformed output still raises (fail closed)."""
+    text = (resp or "").strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```[A-Za-z]*\s*", "", text)
+        text = re.sub(r"\s*```$", "", text)
+    return json.loads(text)
 
 
 class CriticUnavailableError(Exception):
@@ -31,7 +45,7 @@ class CriticAgent:
                 temperature=0.0,
                 max_tokens=settings.CRITIC_MAX_TOKENS,
             )
-            data = json.loads(resp)
+            data = _parse_critic_json(resp)
             verdict = str(data.get("verdict", "fail")).lower()
             issues = data.get("issues") or []
             return verdict == "pass", issues

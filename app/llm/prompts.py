@@ -92,7 +92,7 @@ Check BOTH of these:
    not supporting it). Flag any [n] with no matching context block.
 
 Reply with JSON only, in this exact shape:
-{{"verdict": "pass" or "fail", "issues": ["short description of each problem"]}}"""
+{"verdict": "pass" or "fail", "issues": ["short description of each problem"]}"""
 
 EXPANSION_PROMPT = """You are helping a retrieval system find MORE matching documents for a search query.
 
