@@ -423,8 +423,8 @@ def keyword_search(query: str, top_k: int, collection_id: int | None = None, fil
                       + {settings.KEYWORD_TITLE_BOOST} * ts_rank(to_tsvector('english', d.title),
                                                                plainto_tsquery('english', %s)) AS score
                FROM chunks c JOIN documents d ON d.id = c.document_id
-               WHERE to_tsvector('english', c.content) @@ plainto_tsquery('english', %s)
-                  OR to_tsvector('english', d.title) @@ plainto_tsquery('english', %s)
+               WHERE (to_tsvector('english', c.content) @@ plainto_tsquery('english', %s)
+                  OR to_tsvector('english', d.title) @@ plainto_tsquery('english', %s))
                  {coll_filter}{filter_where}
                ORDER BY score DESC
                LIMIT %s""",
