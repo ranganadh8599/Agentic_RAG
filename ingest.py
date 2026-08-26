@@ -234,7 +234,8 @@ def _report(progress, on_progress, phase, percent, message=None):
 def ingest_file(path: str, title: str | None = None, progress=print,
                 skip_duplicates: bool = True, collection: str = "default",
                 on_progress=None, update_existing: bool = False,
-                user_id: str | None = None) -> tuple[int, int, dict]:
+                user_id: str | None = None,
+                ingested_by: str | None = None) -> tuple[int, int, dict]:
     """Ingest a file. Returns (document_id, chunk_count, info).
 
     info describes what happened:
@@ -299,10 +300,12 @@ def ingest_file(path: str, title: str | None = None, progress=print,
     # Delta update: reuse unchanged chunks (same content_hash), embed only the
     # changed ones, and drop chunks that are no longer present.
     if existing_id is not None:
-        if user_id is not None:
+        if user_id is not None or ingested_by is not None:
             with conn.cursor() as cur:
-                cur.execute("UPDATE documents SET user_id = %s WHERE id = %s",
-                            (user_id, existing_id))
+                cur.execute(
+                    "UPDATE documents SET user_id = COALESCE(%s, user_id), "
+                    "ingested_by = COALESCE(%s, ingested_by) WHERE id = %s",
+                    (user_id, ingested_by, existing_id))
         chunk_size, chunk_overlap = _chunk_params(title, sections)
         stored, reused, removed = _delta_update(
             conn, existing_id, sections, chunk_size, chunk_overlap,
@@ -316,9 +319,9 @@ def ingest_file(path: str, title: str | None = None, progress=print,
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "INSERT INTO documents (collection_id, title, source_type, source_path, user_id) "
-                "VALUES (%s, %s, %s, %s, %s) RETURNING id",
-                (collection_id, title, source_type, path, user_id),
+                "INSERT INTO documents (collection_id, title, source_type, source_path, user_id, ingested_by) "
+                "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
+                (collection_id, title, source_type, path, user_id, ingested_by),
             )
             doc_id = cur.fetchone()["id"]
     except psycopg.errors.UniqueViolation:
@@ -388,7 +391,8 @@ def ingest_file(path: str, title: str | None = None, progress=print,
 
 def ingest_path(path: str, title: str | None = None, progress=print,
                 skip_duplicates: bool = True, collection: str = "default",
-                update_existing: bool = False, user_id: str | None = None) -> tuple[int, int]:
+                update_existing: bool = False, user_id: str | None = None,
+                ingested_by: str | None = None) -> tuple[int, int]:
     """Ingest a file OR every supported file inside a directory."""
     if os.path.isdir(path):
         total_docs = total_chunks = 0
@@ -400,7 +404,8 @@ def ingest_path(path: str, title: str | None = None, progress=print,
                                                    skip_duplicates=skip_duplicates,
                                                    collection=collection,
                                                    update_existing=update_existing,
-                                                   user_id=user_id)
+                                                   user_id=user_id,
+                                                   ingested_by=ingested_by)
                     if n > 0:
                         total_docs += 1
                     total_chunks += n
@@ -409,5 +414,6 @@ def ingest_path(path: str, title: str | None = None, progress=print,
                                    skip_duplicates=skip_duplicates,
                                    collection=collection,
                                    update_existing=update_existing,
-                                   user_id=user_id)
+                                   user_id=user_id,
+                                   ingested_by=ingested_by)
     return doc_id, n

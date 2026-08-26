@@ -88,9 +88,11 @@ Everything is provider-agnostic: all LLM and embedding calls go through
 - **Smarter retrieval** — two-stage retrieve→rerank with a cross-encoder
   (GPU-accelerated), BM25-style sparse search for exact names/codes/acronyms,
   multi-turn follow-up rewriting, and metadata filtering (user/tags/date).
-- **Per-user privacy** — caches are scoped per user; admins share the global
-  cache, regular users only see their own, so private documents never leak via a
-  cache hit.
+- **Roles & per-user privacy** — the **shared corpus** (admin/CLI-ingested
+  docs) is visible to everyone. A normal user additionally sees their **own**
+  uploads; a user's private uploads are visible to **nobody else — not even the
+  admin**. Uploads are auto-owned (`user_id`) and tagged with who ingested them
+  (`ingested_by`), enforced at the chat endpoint.
 - **Full observability** — end-to-end pipeline logging with ASCII tables
   (variants, ranked candidates, cited sources) and date/time-based log files.
 - **Developer friendly** — OpenAI-compatible API (`/v1/chat/completions`),
@@ -139,9 +141,11 @@ Everything is provider-agnostic: all LLM and embedding calls go through
   (any/all), or a `date_from`/`date_to` range, applied before the ANN scan
   (`METADATA_FILTER_MODE=pre`, fast) or after (`post`, guarantees recall).
 - **Per-user + admin cache scoping** — caches are scoped by `user_id`: admins
-  and anonymous share the global cache, regular users get their own, so private
-  documents never leak via a cache hit. Grant admin with `cli.py admin <username>`
-  (revoke with `--remove`).
+  and anonymous use the shared/global cache; a normal user **reads** their own
+  bucket **plus the global (admin) cache** but **writes only to their own**. The
+  global bucket never stores results that touch a private document, so a user
+  reading the admin cache can never leak another user's files. Grant admin with
+  `cli.py admin <username>` (revoke with `--remove`).
 - **Hybrid retrieval** — vector search + Postgres full-text keyword search,
   **LLM query expansion**, and **reciprocal-rank fusion**.
 - **Semantic cache** — repeated queries answered instantly when a semantically
@@ -255,16 +259,74 @@ python cli.py ask "What is the revenue mentioned in the report?"
 python cli.py ask "..." --collection hr                  # search only the 'hr' table
 python cli.py chat                                        # interactive chat
 
-# 5. Start MongoDB (users + chat history)
+# 5. Roles — how a user becomes admin
+#    Admin:        sees the shared corpus (admin/CLI uploads), global cache.
+#    Normal user:  sees the shared corpus + their own uploads, own cache.
+#    New users are normal by default; promote/revoke with:
+python cli.py admin alice                    # grant admin to alice
+python cli.py admin alice --remove           # revoke admin from alice
+
+# 6. Start MongoDB (users + chat history)
 #    Portable install: extract https://fastdl.mongodb.org/windows/mongodb-windows-x86_64-8.3.8.zip to C:\mongodb
 C:\mongodb\mongodb-win32-x86_64-windows-8.3.8\bin\mongod.exe --dbpath C:\mongodb\data --port 27017 --bind_ip 127.0.0.1
 #    NOTE: mongod is a manual background process (not a service) — start it again after a reboot.
 
-# 6. Run the API server
+# 7. Run the API server
 uvicorn api:app --reload --port 8000
 curl -X POST http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"messages":[{"role":"user","content":"Summarize the PDF"}],"stream":true}'
+```
+
+## Deploy with Docker
+
+Everything (Postgres + pgvector, MongoDB, and the app) runs from a single
+`docker-compose.yml` — no local installs needed.
+
+### 1. Set up `.env`
+Copy `.env.example` to `.env` and set your LLM/embedding provider + API key
+(see the comments at the top). In Docker the `DATABASE_URL` and `MONGO_URI`
+are overridden automatically to point at the compose services, so those two
+values in `.env` are ignored.
+
+### 2. Build & start
+```bash
+docker compose up --build
+```
+The app starts once Postgres and Mongo report healthy. Open
+**http://localhost:8000**.
+
+### 3. What's inside
+| Service | Image | Notes |
+|---|---|---|
+| `app` | built from `Dockerfile` | FastAPI + web UI on `:8000` |
+| `db` | `pgvector/pgvector:pg18` | vectors, documents, caches |
+| `mongo` | `mongo:8` | users, sessions, chat history |
+
+Volumes keep your data: `pgdata` (Postgres), `mongodata` (Mongo), `hf-cache`
+(reranker model), and `./logs` (app logs) on the host.
+
+### Notes
+- **First chat downloads the reranker** (Qwen3-Reranker-0.6B, ~1.1 GB) from
+  Hugging Face into the `hf-cache` volume — the first answer is slower, later
+  ones reuse the cache. To skip reranking set `USE_RERANKER=0` in `.env`.
+- **CPU by default** — the base image uses CPU-only torch so the image stays
+  ~3 GB smaller. For GPU reranking:
+  ```bash
+  docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build
+  ```
+  (rebuilds with CUDA torch and passes the host GPU; the reranker runs on
+  `cuda:0`. Requires the NVIDIA Container Toolkit.)
+- **Stop / reset:**
+  ```bash
+  docker compose down          # stop (keeps volumes)
+  docker compose down -v       # stop AND wipe postgres/mongo/hf volumes
+  ```
+
+### CLI inside the container
+```bash
+docker compose exec app python cli.py admin alice                 # promote a user
+docker compose exec app python cli.py ingest /app/fixtures/notes.txt
 ```
 
 ## Web UI
@@ -299,7 +361,7 @@ sidebar shows collections, your documents, and stats.*
 | Table | Purpose |
 |-------|---------|
 | `collections` | named tables/namespaces; each document, chunk, and cache row belongs to one |
-| `documents` | one row per ingested file (title, type, path, metadata, `collection_id`) |
+| `documents` | one row per ingested file (title, type, path, metadata, `user_id` owner, `ingested_by` uploader, `collection_id`) |
 | `chunks` | chunked content with embeddings (vector or jsonb), `collection_id` |
 | `semantic_cache` | query→answer cache with embeddings (cosine threshold), `collection_id` |
 
@@ -307,7 +369,7 @@ sidebar shows collections, your documents, and stats.*
 
 | Collection | Purpose |
 |-------|---------|
-| `users` | accounts — `username` (unique) + `display_name` + PBKDF2 `password_hash` |
+| `users` | accounts — `username` (unique) + `display_name` + PBKDF2 `password_hash` + `is_admin` flag |
 | `sessions` | login tokens (opaque bearer tokens, 30-day TTL via Mongo TTL index) |
 | `conversations` | chat sessions (`title` + `user_id`; deleting cascades to messages) |
 | `messages` | per-turn messages (`conversation_id` + embeddings for semantic memory) |

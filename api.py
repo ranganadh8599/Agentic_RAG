@@ -32,6 +32,11 @@ log = logging.getLogger("api")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logging_config.setup_logging()
+    # Create the schema (idempotent) + Mongo indexes. This lives in the
+    # lifespan because newer FastAPI/Starlette no longer fire
+    # @app.on_event("startup") when a lifespan is provided.
+    db.init_db()
+    mongo.init_db()  # safe no-op if MongoDB is not running
     log.info("🚀 Server started")
     yield
     log.info("🛑 Server stopped")
@@ -49,12 +54,6 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 @app.get("/")
 def index():
     return FileResponse(os.path.join(STATIC_DIR, "index.html"))
-
-
-@app.on_event("startup")
-def _startup():
-    db.init_db()
-    mongo.init_db()  # safe no-op if MongoDB is not running
 
 
 def _count(table: str) -> int:
@@ -175,7 +174,20 @@ def ingest_endpoint(file: UploadFile = File(...), title: str | None = Form(None)
                     update: bool = Query(False, description="delta-update an existing "
                         "doc: reuse unchanged chunks, embed only changed ones"),
                     user_id: str | None = Form(None, description="owner of the doc "
-                        "(used by metadata filtering)")):
+                        "(used by metadata filtering)"),
+                    request: Request = None):
+    # Ownership: a logged-in non-admin's uploads are owned by them — the form
+    # user_id is ignored so a user can't tag a doc as someone else's. Admins
+    # and anonymous callers keep the explicit user_id (admin may tag for any
+    # user; anonymous leaves the doc public).
+    owner = mongo.user_from_token(_bearer(request)) if request is not None else None
+    if owner and not owner.get("is_admin"):
+        user_id = owner["id"]
+    # Record WHO ingested the doc: an authenticated admin/user gets their id,
+    # anonymous stays NULL. Ownerless docs with ingested_by set (admin/CLI) are
+    # the shared corpus every normal user can see; anonymous uploads (both
+    # NULL) stay hidden from normal users.
+    ingested_by = owner["id"] if owner else None
     # Use the real uploaded filename as the document title (not the temp name).
     real_name = file.filename or "upload"
     suffix = os.path.splitext(real_name)[1] or ".txt"
@@ -211,7 +223,8 @@ def ingest_endpoint(file: UploadFile = File(...), title: str | None = Form(None)
                                              collection=collection or "default",
                                              on_progress=on_progress,
                                              update_existing=update,
-                                             user_id=user_id)
+                                             user_id=user_id,
+                                             ingested_by=ingested_by)
         # info["mode"] distinguishes: "ingested" (fresh), "updated" (delta
         # update — only changed chunks embedded), "skipped" (duplicate name),
         # "empty" (no extractable text).
@@ -419,9 +432,18 @@ def chat_endpoint(req: ChatRequest, request: Request):
     # bucket; regular users get their own per-user cache so their private
     # uploads and related cached answers never leak across accounts.
     cache_scope = None if (not user or user.get("is_admin")) else user["id"]
+    # Retrieval scope: the shared corpus (admin/CLI-ingested, ownerless docs)
+    # is visible to everyone. A logged-in non-admin additionally sees their
+    # own uploads. Users' private uploads are visible to NOBODY else — not
+    # even the admin.
+    filters = dict(req.filters or {})
+    if user and not user.get("is_admin"):
+        filters["user_id"] = [None, user["id"]]
+    else:
+        filters["user_id"] = [None]
     log.info("▶️  User query | user=%s stream=%s collection=%s filters=%s | %r",
              (user or {}).get("username"), req.stream, req.collection,
-             req.filters, query[:120])
+             filters, query[:120])
     if req.conversation_id is not None:
         owner = memory.conversation_owner(req.conversation_id)
         if owner is None:
@@ -435,14 +457,14 @@ def chat_endpoint(req: ChatRequest, request: Request):
 
     if req.stream:
         events = orchestrator.run_stream(query, conversation_id=conv, collection=req.collection,
-                                         filters=req.filters,
+                                         filters=filters,
                                          user_id=cache_scope)
         log.info("… streaming response | conv=%s", conv)
         return StreamingResponse(_sse(model, _tracked_stream(events, conv), conv),
                                  media_type="text/event-stream")
 
     res = orchestrator.run(query, conversation_id=conv, collection=req.collection,
-                           filters=req.filters,
+                           filters=filters,
                            user_id=cache_scope)
     log.info("✅ Response sent | type=%s sources=%d chars=%d",
              res.get("type"), len(res.get("sources") or []),

@@ -1,0 +1,22 @@
+# ============================================================================
+# GPU override for Agentic RAG.
+#
+# Rebuilds the app with CUDA-enabled torch and gives the container the host
+# GPU, so the cross-encoder reranker runs on cuda:0 instead of CPU.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build
+#
+# Requires the NVIDIA Container Toolkit on the host.
+# ============================================================================
+services:
+  app:
+    build:
+      args:
+        TORCH_INDEX_URL: https://download.pytorch.org/whl/cu124
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
