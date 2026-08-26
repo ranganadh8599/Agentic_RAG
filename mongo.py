@@ -14,7 +14,7 @@ import secrets
 from datetime import datetime, timedelta, timezone
 
 from bson import ObjectId
-from pymongo import MongoClient
+from pymongo import MongoClient, ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
 from config import settings
@@ -70,6 +70,7 @@ def register_user(username: str, display_name: str | None, password: str) -> dic
         "display_name": (display_name or username).strip() or username,
         "password_hash": _hash(password, salt).hex(),
         "password_salt": salt.hex(),
+        "is_admin": False,
         "created_at": _now(),
     }
     try:
@@ -97,7 +98,8 @@ def login_user(username: str, password: str):
     })
     return {
         "user": {"id": str(user["_id"]), "username": user["username"],
-                 "display_name": user["display_name"]},
+                 "display_name": user["display_name"],
+                 "is_admin": bool(user.get("is_admin"))},
         "token": token,
     }
 
@@ -153,7 +155,8 @@ def user_from_token(token: str | None):
         if not user:
             return None
         return {"id": str(user["_id"]), "username": user["username"],
-                "display_name": user["display_name"]}
+                "display_name": user["display_name"],
+                "is_admin": bool(user.get("is_admin"))}
     except Exception:  # noqa: BLE001
         return None
 
@@ -162,7 +165,27 @@ def get_user(user_id: str):
     try:
         u = _users.find_one({"_id": _oid(user_id)})
         return {"id": str(u["_id"]), "username": u["username"],
-                "display_name": u["display_name"]} if u else None
+                "display_name": u["display_name"],
+                "is_admin": bool(u.get("is_admin"))} if u else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def set_admin(username: str, is_admin: bool = True) -> dict | None:
+    """Grant/revoke the admin role for a user (by username). Returns the updated
+    user or None when the user doesn't exist. Admins share the global/shared
+    retrieval+semantic cache; regular users are scoped to their own."""
+    try:
+        u = _users.find_one_and_update(
+            {"username": (username or "").strip().lower()},
+            {"$set": {"is_admin": bool(is_admin)}},
+            return_document=ReturnDocument.AFTER,
+        )
+        if not u:
+            return None
+        return {"id": str(u["_id"]), "username": u["username"],
+                "display_name": u["display_name"],
+                "is_admin": bool(u.get("is_admin"))}
     except Exception:  # noqa: BLE001
         return None
 

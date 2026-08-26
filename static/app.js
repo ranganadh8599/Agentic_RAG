@@ -582,6 +582,12 @@ async function sendMessage() {
   sendBtn.disabled = true;
 
   const { bubble } = addMessage("assistant", "");
+  // Live status line ("searching…", "reranking…") shown while the server works
+  // before the first token; replaced by streamed content as soon as it arrives.
+  const statusEl = document.createElement("span");
+  statusEl.className = "status";
+  statusEl.textContent = "…";
+  bubble.appendChild(statusEl);
   const cursor = document.createElement("span");
   cursor.className = "cursor";
   bubble.appendChild(cursor);
@@ -618,8 +624,13 @@ async function sendMessage() {
         if (data === "[DONE]") continue;
         try {
           const ev = JSON.parse(data);
+          if (ev.status) {
+            statusEl.textContent = ev.status;
+            scrollBottom();
+          }
           const delta = ev.choices && ev.choices[0] && ev.choices[0].delta && ev.choices[0].delta.content;
           if (delta) {
+            statusEl.remove();
             answer += delta;
             cursor.remove();
             renderAnswer(bubble, answer);
@@ -631,9 +642,11 @@ async function sendMessage() {
       }
     }
   } catch (err) {
+    statusEl.remove();
     cursor.remove();
     bubble.textContent = "⚠️ " + err.message;
   } finally {
+    statusEl.remove();
     cursor.remove();
     if (answer) renderAnswer(bubble, answer);
     renderSources(bubble.parentElement, sources);

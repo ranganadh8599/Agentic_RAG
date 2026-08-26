@@ -7,15 +7,20 @@
 #   OrchestratorAgent -> coordinates the above + memory + semantic cache
 
 import json
+import logging
 import re
+import time
 
 from config import settings
 import db
 from llm import chat_text
 from prompts import (ROUTER_PROMPT, WRITER_PROMPT, CRITIC_PROMPT, GENERAL_PROMPT,
-                     GREETING_PROMPT)
+                     GREETING_PROMPT, REWRITE_PROMPT)
 import retrieval
 import memory
+from logging_config import fmt_table
+
+log = logging.getLogger("agents")
 
 # ---- citation robustness helpers -------------------------------------------
 # Deterministic post-processing that keeps citations honest:
@@ -188,15 +193,17 @@ class RouterAgent:
 
 
 class RetrieverAgent:
-    def run(self, query: str, top_k: int | None = None, collection: str | None = None):
-        return retrieval.retrieve(query, top_k=top_k, collection=collection)
+    def run(self, query: str, top_k: int | None = None, collection: str | None = None,
+            filters=None, user_id: str | None = None):
+        return retrieval.retrieve(query, top_k=top_k, collection=collection,
+                                  filters=filters, user_id=user_id)
 
 
 class WriterAgent:
     def _build_messages(self, query, context_blocks, memory_text, feedback=None):
         if context_blocks:
             context = "\n\n".join(
-                f"[{r['citation']}] ({r['title']})\n{r['content']}"
+                f"[{r['citation']}] ({r.get('title') or r.get('doc_id') or 'source'})\n{r['content']}"
                 for r in context_blocks
             )
         else:
@@ -270,6 +277,49 @@ class OrchestratorAgent:
             parts.append(f"Also relevant from earlier:\n{relevant}")
         return "\n\n".join(parts)
 
+    def _rewrite_query(self, query: str, conversation_id: str | None) -> str:
+        """Multi-turn support: rewrite a follow-up question into a standalone,
+        self-contained query using the conversation history so retrieval and
+        routing can resolve pronouns/ellipsis.
+
+        "what does it do?"  ->  "What does RAGAS do?"
+
+        Returns the original query unchanged when there is no history, the
+        feature is disabled, or the LLM says the query is already standalone.
+        The original text is still persisted to memory and shown to the user;
+        only retrieval/routing/generation use the resolved query."""
+        if not settings.USE_QUERY_REWRITE or not conversation_id:
+            return query
+        try:
+            # Called BEFORE the current turn is persisted, so get_recent holds
+            # only PRIOR turns. At least one prior exchange is required for a
+            # rewrite to make sense (turn 1 has no history -> no rewrite).
+            recent = memory.get_recent(conversation_id, k=8)
+            if not recent:
+                return query
+            transcript = "\n".join(f"{m['role']}: {m['content']}" for m in recent)
+            if not transcript.strip():
+                return query
+            out = (chat_text([
+                {"role": "system", "content": REWRITE_PROMPT.format(
+                    transcript=transcript, query=query)}]) or "").strip()
+            # Defensive: never let a rewrite empty the query or turn it into
+            # a refusal-style filler. Take the first non-empty line in case the
+            # LLM rambles after the query, and only reject obvious refusals.
+            # (Deliberately does NOT reject outputs starting with "I" etc. —
+            # "I want to know what scoring means in RAGAS" is a valid rewrite.)
+            first = next((ln.strip() for ln in out.splitlines() if ln.strip()), "")
+            if len(first) < 4:
+                return query
+            low = first.lower()
+            if low.startswith(("no ", "cannot", "i can't", "i don't", "i'm not",
+                               "not sure", "no rewrite", "please clarify")):
+                return query
+            return first
+        except Exception:  # noqa: BLE001
+            pass
+        return query
+
     def _persist_user(self, conversation_id, query, q_emb):
         """Save the user's message immediately so it is never lost if the turn is
         interrupted."""
@@ -277,14 +327,14 @@ class OrchestratorAgent:
             memory.add_message(conversation_id, "user", query, embedding=q_emb)
 
     def _persist(self, conversation_id, query, answer, q_emb, cached, sources=None,
-                 collection_id=None):
+                 collection_id=None, user_id=None):
         if conversation_id:
             memory.add_message(conversation_id, "assistant", answer,
                                embedding=retrieval.embed_query(answer),
                                sources=sources)
         if not cached and q_emb is not None:
             retrieval.semantic_cache_store(query, q_emb, answer, settings.LLM_MODEL,
-                                           sources, collection_id)
+                                           sources, collection_id, user_id)
 
     def _sources(self, blocks, answer=""):
         out = []
@@ -296,6 +346,9 @@ class OrchestratorAgent:
                 "title": r.get("title"),
                 "doc_id": r.get("doc_id"),
                 "score": round(float(r.get("rrf_score") or 0.0), 4),
+                # Cross-encoder relevance in [0,1] (sigmoid of the raw logit) —
+                # a confidence measure for this source matching the query.
+                "rerank_confidence": round(float(r.get("rerank_confidence") or 0.0), 4),
                 "page": meta.get("page"),
                 "image_id": meta.get("image_id"),
                 "snippet": _best_snippet(content, answer),
@@ -352,18 +405,35 @@ class OrchestratorAgent:
         return answer
 
     def run(self, query: str, conversation_id: str | None = None, top_k: int | None = None,
-            collection: str | None = None) -> dict:
+            collection: str | None = None, filters=None, user_id: str | None = None) -> dict:
         # Greetings short-circuit: no embedding, no router, no RAG retrieval.
         if _is_greeting(query):
             answer = self._greet(query, conversation_id)
             return {"answer": answer, "sources": [], "type": "greeting"}
 
-        q_emb = retrieval.embed_query(query) if conversation_id else None
+        # Multi-turn: resolve follow-ups ("what does it do?") against the
+        # conversation history so retrieval + routing see a self-contained
+        # query. The original text is still persisted/shown to the user.
+        _t0 = time.perf_counter()
+        retrieval_query = self._rewrite_query(query, conversation_id)
+        if retrieval_query != query:
+            log.info("✏️  Follow-up resolved: %r → %r", query[:80], retrieval_query[:80])
+        q_emb = retrieval.embed_query(retrieval_query) if conversation_id else None
         memory_text = self._memory_for(conversation_id, q_emb)
-        kind = self.router.classify(query)
+        kind = self.router.classify(retrieval_query)
+        log.info("🧭 Query type: %s | user=%s collection=%s filters=%s",
+                 kind, user_id, collection, bool(filters))
         self._persist_user(conversation_id, query, q_emb)
 
-        result = self.retriever.run(query, top_k=top_k, collection=collection)
+        result = self.retriever.run(retrieval_query, top_k=top_k,
+                                    collection=collection, filters=filters,
+                                    user_id=user_id)
+        _lat = result.get("latency_ms") or {}
+        log.info("📥 Fetched %d chunks | best match=%.2f | search=%.1fs rerank=%.1fs | cache=%s",
+                 len(result.get("results") or []),
+                 result.get("best_score") or 0.0,
+                 (_lat.get("stage1") or 0) / 1000, (_lat.get("rerank") or 0) / 1000,
+                 "hit" if (result.get("cached") or result.get("cached_retrieval")) else "none")
 
         # General-knowledge fallback: no STRONG document match (top vector cosine
         # below the threshold) AND the router says the question is general -> answer
@@ -372,9 +442,10 @@ class OrchestratorAgent:
         best = result.get("best_score") or 0.0
         if (not result.get("cached") and kind == "general"
                 and best < settings.GENERAL_STRONG_THRESHOLD):
+            log.info("🌐 No strong document match (best=%.2f) → answering from general knowledge", best)
             answer = chat_text(
                 [{"role": "system", "content": GENERAL_PROMPT},
-                 {"role": "user", "content": query}])
+                 {"role": "user", "content": retrieval_query}])
             if conversation_id:
                 memory.add_message(conversation_id, "assistant", answer,
                                    embedding=retrieval.embed_query(answer),
@@ -386,50 +457,85 @@ class OrchestratorAgent:
             blocks = []
             kind = "cache"
             sources = result.get("cached_sources") or []
+            log.info("🗄️  Reused cached answer (%d chars)", len(answer))
         else:
             blocks = result.get("results", [])
+            log.info("✍️  Generating answer from %d source chunks …", len(blocks))
             context_text = "\n".join(
                 f"[{r['citation']}] {r['content']}" for r in blocks)
-            answer = self.writer.run(query, blocks, memory_text)
+            answer = self.writer.run(retrieval_query, blocks, memory_text)
 
             # Critic feedback loop.
             for _ in range(settings.MAX_CRITIC_ROUNDS):
-                ok, issues = self.critic.review(query, context_text, answer)
+                ok, issues = self.critic.review(retrieval_query, context_text, answer)
                 if ok or not issues:
                     break
-                answer = self.writer.run(query, blocks, memory_text, feedback=issues)
+                answer = self.writer.run(retrieval_query, blocks, memory_text, feedback=issues)
             sources, answer = self._cited_sources(answer, blocks)
 
         self._persist(conversation_id, query, answer, q_emb, result.get("cached"),
-                      sources, result.get("collection_id"))
+                      sources, result.get("collection_id"), user_id)
+        log.info("📝 Generated answer (%d chars):\n%s", len(answer or ""), answer or "")
+        if sources:
+            log.info("📚 Cited sources:\n%s", fmt_table(
+                ["cit", "title", "page", "conf", "snippet"],
+                [(s.get("citation"), (s.get("title") or "")[:40],
+                  s.get("page"), s.get("rerank_confidence"),
+                  (s.get("snippet") or "")[:48]) for s in sources]))
+        log.info("✅ Answer ready: %d chars, %d sources | total %.1fs",
+                 len(answer or ""), len(sources or []), time.perf_counter() - _t0)
         return {"answer": answer, "sources": sources, "type": kind}
 
     # -- streaming --------------------------------------------------------------
 
     def run_stream(self, query: str, conversation_id: str | None = None,
-                   top_k: int | None = None, collection: str | None = None):
+                   top_k: int | None = None, collection: str | None = None,
+                   filters=None, user_id: str | None = None):
         """Generator yielding events:
         {"type": "content", "delta": str} and finally {"type": "sources", ...}"""
+        _t0 = time.perf_counter()
         # Greetings short-circuit: no embedding, no router, no RAG retrieval.
         if _is_greeting(query):
+            log.info("👋 Greeting reply (no RAG) | conv=%s", conversation_id)
             answer = self._greet(query, conversation_id)
             yield {"type": "content", "delta": answer}
             yield {"type": "sources", "sources": []}
             return
 
-        q_emb = retrieval.embed_query(query) if conversation_id else None
+        # Multi-turn: resolve follow-ups ("what does it do?") against the
+        # conversation history so retrieval + routing see a self-contained
+        # query. The original text is still persisted/shown to the user.
+        yield {"type": "status", "status": "understanding your question…"}
+        retrieval_query = self._rewrite_query(query, conversation_id)
+        if retrieval_query != query:
+            log.info("✏️  Follow-up resolved: %r → %r", query[:80], retrieval_query[:80])
+        q_emb = retrieval.embed_query(retrieval_query) if conversation_id else None
         memory_text = self._memory_for(conversation_id, q_emb)
-        kind = self.router.classify(query)
+        kind = self.router.classify(retrieval_query)
+        log.info("🧭 Query type: %s | user=%s collection=%s filters=%s",
+                 kind, user_id, collection, bool(filters))
         self._persist_user(conversation_id, query, q_emb)
 
-        result = self.retriever.run(query, top_k=top_k, collection=collection)
+        yield {"type": "status", "status": "searching your documents…"}
+        result = self.retriever.run(retrieval_query, top_k=top_k,
+                                    collection=collection, filters=filters,
+                                    user_id=user_id)
+        _lat = result.get("latency_ms") or {}
+        log.info("📥 Fetched %d chunks | best match=%.2f | search=%.1fs rerank=%.1fs | cache=%s",
+                 len(result.get("results") or []),
+                 result.get("best_score") or 0.0,
+                 (_lat.get("stage1") or 0) / 1000, (_lat.get("rerank") or 0) / 1000,
+                 "hit" if (result.get("cached") or result.get("cached_retrieval")) else "none")
+        if settings.USE_RERANKER and not result.get("cached"):
+            yield {"type": "status", "status": "reranking the best matches…"}
 
         best = result.get("best_score") or 0.0
         if (not result.get("cached") and kind == "general"
                 and best < settings.GENERAL_STRONG_THRESHOLD):
+            log.info("🌐 No strong document match (best=%.2f) → answering from general knowledge", best)
             answer = chat_text(
                 [{"role": "system", "content": GENERAL_PROMPT},
-                 {"role": "user", "content": query}])
+                 {"role": "user", "content": retrieval_query}])
             if conversation_id:
                 memory.add_message(conversation_id, "assistant", answer,
                                    embedding=retrieval.embed_query(answer),
@@ -441,11 +547,14 @@ class OrchestratorAgent:
         if result.get("cached"):
             answer = result["cached"]
             sources = result.get("cached_sources") or []
+            log.info("🗄️  Reused cached answer (%d chars)", len(answer))
             yield {"type": "content", "delta": answer}
         else:
             blocks = result.get("results", [])
+            log.info("✍️  Generating answer from %d source chunks …", len(blocks))
+            yield {"type": "status", "status": "writing your answer…"}
             full = ""
-            for full_so_far, delta in self.writer.stream(query, blocks, memory_text):
+            for full_so_far, delta in self.writer.stream(retrieval_query, blocks, memory_text):
                 full = full_so_far
                 if delta:
                     yield {"type": "content", "delta": delta}
@@ -453,13 +562,22 @@ class OrchestratorAgent:
             context_text = "\n".join(f"[{r['citation']}] {r['content']}" for r in blocks)
             answer = full
             for _ in range(settings.MAX_CRITIC_ROUNDS):
-                ok, issues = self.critic.review(query, context_text, answer)
+                ok, issues = self.critic.review(retrieval_query, context_text, answer)
                 if ok or not issues:
                     break
-                answer = self.writer.run(query, blocks, memory_text, feedback=issues)
+                answer = self.writer.run(retrieval_query, blocks, memory_text, feedback=issues)
                 yield {"type": "content", "delta": f"\n[revised] {answer}"}
             sources, answer = self._cited_sources(answer, blocks)
 
         self._persist(conversation_id, query, answer, q_emb, result.get("cached"),
-                      sources, result.get("collection_id"))
+                      sources, result.get("collection_id"), user_id)
+        log.info("📝 Generated answer (%d chars):\n%s", len(answer or ""), answer or "")
+        if sources:
+            log.info("📚 Cited sources:\n%s", fmt_table(
+                ["cit", "title", "page", "conf", "snippet"],
+                [(s.get("citation"), (s.get("title") or "")[:40],
+                  s.get("page"), s.get("rerank_confidence"),
+                  (s.get("snippet") or "")[:48]) for s in sources]))
+        log.info("✅ Answer ready: %d chars, %d sources | total %.1fs",
+                 len(answer or ""), len(sources or []), time.perf_counter() - _t0)
         yield {"type": "sources", "sources": sources}

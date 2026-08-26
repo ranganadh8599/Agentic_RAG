@@ -356,6 +356,7 @@ body {
   box-shadow: var(--shadow); white-space: pre-wrap; word-wrap: break-word; line-height: 1.55;
 }
 .msg .cursor { display: inline-block; width: 8px; height: 16px; background: var(--accent-2); animation: blink 1s steps(1) infinite; border-radius: 2px; vertical-align: text-bottom; margin-left: 2px; }
+.msg .status { color: var(--muted); font-style: italic; font-size: .9em; opacity: .85; margin-right: 6px; }
 @keyframes blink { 50% { opacity: 0; } }
 
 /* Citation markers in answers */

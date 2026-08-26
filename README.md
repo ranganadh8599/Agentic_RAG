@@ -22,9 +22,10 @@ flowchart TB
         OR --> GR{"Pure greeting?"}
         GR -- yes --> LLMG["LLM reply — no RAG"]
         OR --> RT["RouterAgent: rag / summary / vision / general"]
-        RT --> RE["RetrieverAgent: hybrid vector + keyword"]
+        RT --> RE["RetrieverAgent: hybrid vector + keyword + sparse + RRF"]
         PG --> RE
-        RE --> CA{"Semantic cache hit?"}
+        RE --> RR["Reranker: cross-encoder top-k (GPU)"]
+        RR --> CA{"Semantic cache hit?"}
         CA -- yes --> OUT["Grounded answer + [n] citations + sources"]
         CA -- no --> WR["WriterAgent"]
         MEM[("MongoDB memory")] -. "recent + relevant" .-> WR
@@ -43,15 +44,25 @@ flowchart TB
 
 1. **Greeting short-circuit** — pure greetings are answered directly by the
    LLM, skipping RAG entirely (no embedding, retrieval, or citations).
-2. **Router** — classifies the query as `rag`, `summary`, `vision`, or `general`.
-3. **Retriever** — hybrid retrieval (vector + Postgres full-text keyword) with
-   LLM query expansion and reciprocal-rank fusion, scoped to the selected
-   collection; consults the semantic cache first.
-4. **Writer** — generates a grounded answer with `[n]` citations from the
+2. **Query rewrite (multi-turn)** — follow-ups like "what does it do?" are
+   resolved against the conversation history into a standalone, self-contained
+   query ("What does RAGAS do?") so retrieval never loses the subject.
+3. **Router** — classifies the query as `rag`, `summary`, `vision`, or `general`.
+4. **Two-stage Retriever** —
+   - **Stage 1 (bi-encoder recall):** hybrid search (dense vector + Postgres
+     full-text + optional BM25-style sparse) with **LLM query expansion** and
+     **reciprocal-rank fusion**, scoped to the selected collection; fetches a
+     wide candidate pool (`RERANKER_CANDIDATES`). Consults the **semantic** and
+     **retrieval-results** caches first.
+   - **Stage 2 (cross-encoder precision):** a **cross-encoder reranker**
+     (`Qwen/Qwen3-Reranker-0.6B`, on **CUDA GPU** when available) reorders the
+     candidates and keeps the top `TOP_K`, attaching a `rerank_confidence`
+     (in [0,1]) to every source.
+5. **Writer** — generates a grounded answer with `[n]` citations from the
    retrieved blocks, enriched with "recent + relevant" conversation memory.
-5. **Critic** — verifies factual grounding and citation integrity; if issues
+6. **Critic** — verifies factual grounding and citation integrity; if issues
    are found, the Writer retries with feedback (up to `MAX_CRITIC_ROUNDS`, default 2).
-6. **Post-processor** — `sanitize_citations` deterministically drops
+7. **Post-processor** — `sanitize_citations` deterministically drops
    out-of-range or "padding" citations, expands ranges, and dedupes; source-card
    snippets are centered on the cited claim.
 
@@ -74,6 +85,14 @@ Everything is provider-agnostic: all LLM and embedding calls go through
   hr, finance, ...) from ever mixing.
 - **Fast answers** — semantic cache for repeated queries, greeting
   short-circuit, and query-embedding caching.
+- **Smarter retrieval** — two-stage retrieve→rerank with a cross-encoder
+  (GPU-accelerated), BM25-style sparse search for exact names/codes/acronyms,
+  multi-turn follow-up rewriting, and metadata filtering (user/tags/date).
+- **Per-user privacy** — caches are scoped per user; admins share the global
+  cache, regular users only see their own, so private documents never leak via a
+  cache hit.
+- **Full observability** — end-to-end pipeline logging with ASCII tables
+  (variants, ranked candidates, cited sources) and date/time-based log files.
 - **Developer friendly** — OpenAI-compatible API (`/v1/chat/completions`),
   web UI, and a CLI, all backed by an 87-case end-to-end test suite.
 
@@ -102,6 +121,27 @@ Everything is provider-agnostic: all LLM and embedding calls go through
 
 ### 🔎 Retrieval & memory
 
+- **Two-stage reranking (cross-encoder)** — Stage 1 fetches a wide candidate
+  pool (`RERANKER_CANDIDATES`, default 20) via hybrid search + RRF; Stage 2
+  reranks them with a **cross-encoder** (`Qwen/Qwen3-Reranker-0.6B`) running on
+  **CUDA GPU when available** (CPU fallback). Each returned source carries a
+  `rerank_confidence` in [0,1]. `USE_RERANKER=0` disables the rerank stage.
+- **BM25-style sparse search** — exact-term retrieval that catches names, codes
+  and acronyms embeddings miss (`SPARSE_DIM`, `SPARSE_TOP_TERMS`); auto-enabled
+  on pgvector ≥ 0.7 (`USE_SPARSE_SEARCH`, rebuild with `cli.py rebuild-sparse`).
+- **Retrieval-results cache** — popular queries reuse their cached reranked
+  chunk list, skipping search + rerank entirely (`RETRIEVAL_CACHE_ENABLED`,
+  `RETRIEVAL_CACHE_THRESHOLD` 0.97, `RETRIEVAL_CACHE_MAX_ENTRIES` 500).
+- **Multi-turn follow-up rewriting** — `USE_QUERY_REWRITE` resolves pronouns and
+  ellipsis against the conversation history before retrieval ("what does it do?"
+  → "What does RAGAS do?"), so follow-ups never lose their subject.
+- **Metadata filtering** — retrieve only docs/chunks matching `user_id`, `tags`
+  (any/all), or a `date_from`/`date_to` range, applied before the ANN scan
+  (`METADATA_FILTER_MODE=pre`, fast) or after (`post`, guarantees recall).
+- **Per-user + admin cache scoping** — caches are scoped by `user_id`: admins
+  and anonymous share the global cache, regular users get their own, so private
+  documents never leak via a cache hit. Grant admin with `cli.py admin <username>`
+  (revoke with `--remove`).
 - **Hybrid retrieval** — vector search + Postgres full-text keyword search,
   **LLM query expansion**, and **reciprocal-rank fusion**.
 - **Semantic cache** — repeated queries answered instantly when a semantically
@@ -120,6 +160,30 @@ Everything is provider-agnostic: all LLM and embedding calls go through
 - **File-name aware retrieval** — a query that names a document
   ("describe chart.png", "what is in report.pdf?") always surfaces that document
   via an exact title match promoted to the top, even when its chunks are OCR noise.
+
+### 🪵 Logging & debugging
+
+- **Centralized, meaningful logs** — every request is traced end-to-end with
+  readable steps: ▶️ user query → 🧭 query type → 🌱 query expansion → ⚡ rerank →
+  📥 fetched chunks → ✍️ generating answer → 📝 generated answer → 📚 cited sources
+  → ✅ done. Includes ASCII **tables** for the query variants and the ranked
+  candidates (rank / citation / title / score / confidence / snippet).
+- **`LOG_LEVEL`** — `INFO` (default) shows the pipeline trace; `DEBUG` adds
+  per-call LLM/embedding timings and the full rerank pool (what got cut & why).
+- **Log files** — every line is mirrored to `logs/<date>/app_<timestamp>.log`
+  (disable with `LOG_TO_FILE=0`, override the folder with `LOG_DIR`).
+- **Noise-free** — litellm / huggingface / transformers logs are suppressed so
+  only your pipeline shows.
+
+### 📊 Evaluation & quality
+
+- **`eval_ragas.py`** — end-to-end **RAGAS** evaluation (faithfulness, answer
+  relevancy, context precision/recall, plus custom citation-integrity & answer-
+  accuracy metrics) against judged datasets.
+- **`recall_check.py`** — **recall@k + MRR** regression harness ("recall is the
+  north star"); exits non-zero below `--min-recall`.
+- **`benchmark_rerank.py`** — candidate-pool latency/quality sweep + FTS A/B
+  (`--ab fts`) with recall@k/MRR.
 
 ### 🧠 Multi-agent & citation integrity
 
@@ -207,7 +271,9 @@ curl -X POST http://localhost:8000/v1/chat/completions \
 
 Open **http://localhost:8000** in your browser. The built-in UI lets you:
 
-- **Chat** with your documents (live streaming + grounded `[n]` citations)
+- **Chat** with your documents — answers **stream token-by-token** with a live
+  status line (`understanding your question…` → `searching…` → `reranking…` →
+  `writing…`) and grounded `[n]` citations
 - **Drag & drop** PDFs, images, and text files to ingest them instantly
 - **Search in table** — a dropdown that scopes every search to one collection
   (or "All collections"); the document list and stats follow the selection
@@ -290,6 +356,17 @@ Also configurable (defaults shown): `MAX_CRITIC_ROUNDS` (2), `ROUTER_MAX_TOKENS`
 (32), `MEMORY_RECENT_K` (8), `MEMORY_RELEVANT_K` (4), `IMAGE_JPEG_QUALITY` (85),
 `VISION_SUMMARY_MAX_TOKENS` (500), `HNSW_VECTOR_DIM_LIMIT` (2000).
 
+**Two-stage retrieval & reranking:** `USE_RERANKER` (1), `RERANKER_MODEL`
+(`Qwen/Qwen3-Reranker-0.6B`), `RERANKER_CANDIDATES` (20), `RERANKER_BATCH_SIZE`
+(32), `RERANKER_MAX_LENGTH` (1024), `RERANKER_INSTRUCTION` (''). The reranker
+model auto-downloads from HuggingFace on first use and runs on **CUDA** when
+torch is GPU-enabled. Sparse: `USE_SPARSE_SEARCH` (1), `SPARSE_DIM` (16000),
+`SPARSE_TOP_TERMS` (256). Retrieval cache: `RETRIEVAL_CACHE_ENABLED` (1),
+`RETRIEVAL_CACHE_THRESHOLD` (0.97), `RETRIEVAL_CACHE_MAX_ENTRIES` (500).
+Multi-turn: `USE_QUERY_REWRITE` (1), `QUERY_EXPANSION_VARIANTS` (5).
+Metadata filtering: `METADATA_FILTER_MODE` (pre), `METADATA_FILTER_OVERSAMPLE`
+(5). Logging: `LOG_LEVEL` (INFO), `LOG_TO_FILE` (1), `LOG_DIR` (logs/).
+
 **Upload limits** (`0` = unlimited): `MAX_UPLOAD_MB` (max size of a single
 uploaded file, enforced server-side with `413` and pre-checked in the UI),
 `MAX_UPLOAD_FILES` (max files accepted per batch/selection, extra files are
@@ -322,12 +399,18 @@ agentic-rag/
 ├── chunking.py    # CJK-safe recursive chunker
 ├── loaders.py     # PDF / image (vision) / text loaders
 ├── ingest.py      # ingestion pipeline
-├── retrieval.py   # hybrid retrieval + semantic cache + RRF
+├── rerank.py      # cross-encoder reranker (two-stage retrieval, GPU-aware)
+├── sparse.py      # BM25-style sparse search (exact names/codes/acronyms)
+├── retrieval.py   # hybrid retrieval + semantic/retrieval caches + RRF + rerank
+├── logging_config.py  # central logging (console + date/time log files + tables)
 ├── memory.py      # conversation memory (recent + relevant)
 ├── agents.py      # Router / Retriever / Writer / Critic / Orchestrator
 ├── prompts.py     # agent prompts
 ├── api.py         # FastAPI server (OpenAI-compatible) + real auth
-├── cli.py         # ingest / ask / chat / stats / reset
+├── cli.py         # ingest / ask / chat / stats / admin / reset
+├── eval_ragas.py  # RAGAS end-to-end evaluation (faithfulness, relevancy, ...)
+├── recall_check.py  # recall@k + MRR regression harness
+├── benchmark_rerank.py  # rerank candidate-pool benchmark + FTS A/B
 ├── static/        # web UI (HTML / CSS / JS — Markdown-rendered chat)
 └── screenshots/   # UI screenshots used in this README
 ```

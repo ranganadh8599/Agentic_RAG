@@ -26,3 +26,22 @@ python-pptx>=0.6.23
 # Utilities
 python-dotenv>=1.0
 numpy>=1.26
+
+# Cross-encoder reranker (two-stage retrieval). Optional: without it the
+# pipeline falls back to a lightweight lexical reranker.
+sentence-transformers>=3.0
+# For GPU (CUDA) reranking install the CUDA build instead of the default wheel:
+#   pip install --force-reinstall torch --index-url https://download.pytorch.org/whl/cu124
+torch>=2.2
+
+# RAG evaluation (end-to-end quality: faithfulness, answer relevancy,
+# context precision/recall). Used by eval_ragas.py.
+ragas>=0.3
+langchain-litellm>=0.3
+# Pin fsspec so ragas/datasets stays compatible (torch's CUDA wheels bump it
+# past the version datasets allows).
+fsspec<=2026.6.0
+
+# --- Optional dev-only tools (not required by the server) ---
+# make_fixtures.py fixture generator
+reportlab>=4.0
