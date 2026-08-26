@@ -1,0 +1,30 @@
+# Build context exclusions (keep the image small and secret-free)
+venv/
+.venv/
+.git/
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Secrets — the container gets env via docker-compose `env_file`, never baked in
+.env
+.env.local
+
+# Local dev/test artifacts not needed at runtime
+logs/
+screenshots/
+docs_upload/
+fixtures/
+test_*.py
+debug_*.py
+eval_*.py
+benchmark_*.py
+recall_*.py
+preview_*.py
+make_fixtures.py
+*.log
+*.result.txt
+*.history.json
+*.dataset.json
+.pytest_cache/
+.ipynb_checkpoints/

@@ -32,6 +32,11 @@ log = logging.getLogger("api")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logging_config.setup_logging()
+    # Create the schema (idempotent) + Mongo indexes. This lives in the
+    # lifespan because newer FastAPI/Starlette no longer fire
+    # @app.on_event("startup") when a lifespan is provided.
+    db.init_db()
+    mongo.init_db()  # safe no-op if MongoDB is not running
     log.info("🚀 Server started")
     yield
     log.info("🛑 Server stopped")
@@ -49,12 +54,6 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 @app.get("/")
 def index():
     return FileResponse(os.path.join(STATIC_DIR, "index.html"))
-
-
-@app.on_event("startup")
-def _startup():
-    db.init_db()
-    mongo.init_db()  # safe no-op if MongoDB is not running
 
 
 def _count(table: str) -> int:

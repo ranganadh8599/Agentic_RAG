@@ -271,11 +271,62 @@ python cli.py admin alice --remove           # revoke admin from alice
 C:\mongodb\mongodb-win32-x86_64-windows-8.3.8\bin\mongod.exe --dbpath C:\mongodb\data --port 27017 --bind_ip 127.0.0.1
 #    NOTE: mongod is a manual background process (not a service) — start it again after a reboot.
 
-# 6. Run the API server
+# 7. Run the API server
 uvicorn api:app --reload --port 8000
 curl -X POST http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"messages":[{"role":"user","content":"Summarize the PDF"}],"stream":true}'
+```
+
+## Deploy with Docker
+
+Everything (Postgres + pgvector, MongoDB, and the app) runs from a single
+`docker-compose.yml` — no local installs needed.
+
+### 1. Set up `.env`
+Copy `.env.example` to `.env` and set your LLM/embedding provider + API key
+(see the comments at the top). In Docker the `DATABASE_URL` and `MONGO_URI`
+are overridden automatically to point at the compose services, so those two
+values in `.env` are ignored.
+
+### 2. Build & start
+```bash
+docker compose up --build
+```
+The app starts once Postgres and Mongo report healthy. Open
+**http://localhost:8000**.
+
+### 3. What's inside
+| Service | Image | Notes |
+|---|---|---|
+| `app` | built from `Dockerfile` | FastAPI + web UI on `:8000` |
+| `db` | `pgvector/pgvector:pg18` | vectors, documents, caches |
+| `mongo` | `mongo:8` | users, sessions, chat history |
+
+Volumes keep your data: `pgdata` (Postgres), `mongodata` (Mongo), `hf-cache`
+(reranker model), and `./logs` (app logs) on the host.
+
+### Notes
+- **First chat downloads the reranker** (Qwen3-Reranker-0.6B, ~1.1 GB) from
+  Hugging Face into the `hf-cache` volume — the first answer is slower, later
+  ones reuse the cache. To skip reranking set `USE_RERANKER=0` in `.env`.
+- **CPU by default** — the base image uses CPU-only torch so the image stays
+  ~3 GB smaller. For GPU reranking:
+  ```bash
+  docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build
+  ```
+  (rebuilds with CUDA torch and passes the host GPU; the reranker runs on
+  `cuda:0`. Requires the NVIDIA Container Toolkit.)
+- **Stop / reset:**
+  ```bash
+  docker compose down          # stop (keeps volumes)
+  docker compose down -v       # stop AND wipe postgres/mongo/hf volumes
+  ```
+
+### CLI inside the container
+```bash
+docker compose exec app python cli.py admin alice                 # promote a user
+docker compose exec app python cli.py ingest /app/fixtures/notes.txt
 ```
 
 ## Web UI

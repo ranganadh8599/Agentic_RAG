@@ -1,0 +1,71 @@
+# ============================================================================
+# Agentic RAG - one-command full stack: Postgres+pgvector, MongoDB, and the app.
+#
+#   docker compose up --build
+#     -> app at http://localhost:8000
+#
+# Requires a .env file (copy .env.example) with your API keys / model settings.
+# DATABASE_URL and MONGO_URI are overridden below to the compose services, so
+# whatever localhost value .env holds is ignored inside Docker.
+# ============================================================================
+name: agentic-rag
+
+services:
+  # --- PostgreSQL + pgvector (vectors, docs, semantic/retrieval caches) ---
+  db:
+    image: pgvector/pgvector:pg18
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: agentic_rag
+    volumes:
+      # PG18 images store data in a major-version subdir under /var/lib/postgresql.
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d agentic_rag"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  # --- MongoDB (users, sessions, chat history) ---
+  mongo:
+    image: mongo:8
+    volumes:
+      - mongodata:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  # --- The app (FastAPI + web UI) ---
+  app:
+    build:
+      context: .
+      args:
+        TORCH_INDEX_URL: ${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cpu}
+    env_file:
+      - .env
+    environment:
+      # Point at the compose services (override any localhost value in .env).
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/agentic_rag
+      MONGO_URI: mongodb://mongo:27017
+    ports:
+      - "8000:8000"
+    volumes:
+      # Persist logs on the host + the reranker model cache across restarts.
+      - ./logs:/app/logs
+      - hf-cache:/root/.cache/huggingface
+    depends_on:
+      db:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  mongodata:
+  hf-cache:

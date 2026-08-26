@@ -125,16 +125,9 @@ def init_db() -> bool:
         ALTER TABLE semantic_cache ADD COLUMN IF NOT EXISTS sources JSONB DEFAULT '{{}}'::jsonb;
         ALTER TABLE semantic_cache ADD COLUMN IF NOT EXISTS collection_id INT REFERENCES collections(id) ON DELETE CASCADE;
         ALTER TABLE semantic_cache ADD COLUMN IF NOT EXISTS user_id TEXT;
-        ALTER TABLE retrieval_cache ADD COLUMN IF NOT EXISTS user_id TEXT;
-        ALTER TABLE documents ADD COLUMN IF NOT EXISTS collection_id INT REFERENCES collections(id) ON DELETE SET NULL;
-        ALTER TABLE chunks ADD COLUMN IF NOT EXISTS content_hash TEXT;
-        ALTER TABLE documents ADD COLUMN IF NOT EXISTS user_id TEXT;
-        ALTER TABLE documents ADD COLUMN IF NOT EXISTS ingested_by TEXT;
-        -- Existing ownerless docs were all admin/CLI uploads: treat them as the
-        -- shared corpus so normal users can still see them.
-        UPDATE documents SET ingested_by = 'admin'
-        WHERE user_id IS NULL AND ingested_by IS NULL;
 
+        -- retrieval_cache is created BEFORE any ALTERs reference it, so the
+        -- schema block also works on a completely fresh (empty) database.
         CREATE TABLE IF NOT EXISTS retrieval_cache (
             id              SERIAL PRIMARY KEY,
             query           TEXT NOT NULL,
@@ -149,6 +142,15 @@ def init_db() -> bool:
         );
         ALTER TABLE retrieval_cache ADD COLUMN IF NOT EXISTS results JSONB NOT NULL DEFAULT '[]'::jsonb;
         ALTER TABLE retrieval_cache ADD COLUMN IF NOT EXISTS best_score DOUBLE PRECISION NOT NULL DEFAULT 0;
+        ALTER TABLE retrieval_cache ADD COLUMN IF NOT EXISTS user_id TEXT;
+        ALTER TABLE documents ADD COLUMN IF NOT EXISTS collection_id INT REFERENCES collections(id) ON DELETE SET NULL;
+        ALTER TABLE chunks ADD COLUMN IF NOT EXISTS content_hash TEXT;
+        ALTER TABLE documents ADD COLUMN IF NOT EXISTS user_id TEXT;
+        ALTER TABLE documents ADD COLUMN IF NOT EXISTS ingested_by TEXT;
+        -- Existing ownerless docs were all admin/CLI uploads: treat them as the
+        -- shared corpus so normal users can still see them.
+        UPDATE documents SET ingested_by = 'admin'
+        WHERE user_id IS NULL AND ingested_by IS NULL;
     """)
 
     if USE_PGVECTOR:
