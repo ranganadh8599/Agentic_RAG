@@ -1,0 +1,26 @@
+[
+  {
+    "question": "What is the project idea described in the notes?",
+    "relevant_documents": ["notes.txt"]
+  },
+  {
+    "question": "Which index type should be tried for fast search?",
+    "relevant_documents": ["notes.txt"]
+  },
+  {
+    "question": "Which AI providers should the RAG system support?",
+    "relevant_documents": ["notes.txt"]
+  },
+  {
+    "question": "What feature would summarize embedded images?",
+    "relevant_documents": ["notes.txt"]
+  },
+  {
+    "question": "Who is the data contact listed in the readme template?",
+    "relevant_documents": ["Scientific-Readme-Template.md"]
+  },
+  {
+    "question": "What should the template describe under the Data section?",
+    "relevant_documents": ["Scientific-Readme-Template.md"]
+  }
+]

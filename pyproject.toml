@@ -10,3 +10,9 @@ testpaths = ["tests"]
 # Only collect files named test_*.py — tests/e2e_test.py is a standalone
 # script that requires a live server and is not a pytest module.
 python_files = ["test_*.py"]
+# Keep the default suite fast/hermetic; RAG evaluation needs real models and
+# is opt-in via `pytest -m evaluation`.
+addopts = "-m 'not evaluation' -q"
+markers = [
+    "evaluation: RAG quality evaluation (requires real models; run `pytest -m evaluation`)",
+]
