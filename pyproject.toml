@@ -1,0 +1,12 @@
+# Agentic RAG - project metadata & tool configuration.
+# (Python packaging is not set up yet; this file currently only configures
+# pytest so it can import the `app` package and scope collection to tests/.)
+
+[tool.pytest.ini_options]
+# Make the repo root importable so `import app...` / `import cli...` work.
+pythonpath = ["."]
+# Only collect tests under tests/ (root test_*.py are standalone dev scripts).
+testpaths = ["tests"]
+# Only collect files named test_*.py — tests/e2e_test.py is a standalone
+# script that requires a live server and is not a pytest module.
+python_files = ["test_*.py"]
