@@ -204,6 +204,62 @@ ingested. Deeper one-off runs — candidate-pool sweeps, FTS A/B, judged dataset
 recalls — use the local-only dev scripts `benchmark_rerank.py`,
 `recall_check.py`, and `eval_ragas.py`; these are kept out of version control.)
 
+### 📈 Measured results — RAG quality experiment (2026-08)
+
+Real numbers captured on this repo's own corpus against the golden set in
+`tests/evaluation/datasets/rag_eval.json` (**32 judged questions across 10
+documents**). Environment: `gemini-embedding-2` (3072-d) + `gemini-2.5-flash`,
+`Qwen3-Reranker-0.6B` on a **GTX 1650 Ti** (CUDA), sparse channel unavailable
+(`SPARSE_READY=False` — pgvector < 0.7). The ablation is reproducible:
+
+```powershell
+python -m pytest -m evaluation -k ablation
+```
+
+**Retrieval ablation** — same 32 questions per config, `top_k=10`, caches
+bypassed. (Hybrid configs include 5-query LLM expansion — the FTS channel runs
+on expansion variants.)
+
+| config | Recall@1 | Recall@5 | Recall@10 | MRR | P50 ms |
+|---|---|---|---|---|---|
+| Dense | 0.938 | 0.969 | 0.969 | 0.953 | 27 |
+| Dense + Reranker | 0.938 | 0.938 | 0.969 | 0.941 | 11,420 |
+| Hybrid + RRF | 0.906 | 0.938 | 0.969 | 0.918 | 6,624 |
+| Hybrid + RRF + Reranker | 0.938 | 0.938 | 0.969 | 0.941 | 14,023 |
+
+*Reading:* on this golden set **dense-only is the best cost/recall trade-off**
+(R@5 0.969, MRR 0.953, 27 ms). Hybrid/rerank add 6–14 s/query on this GPU
+without a recall gain — hybrid exists to rescue exact-term / long-tail recall
+on harder corpora, not needed on this easy, dense-friendly set.
+
+**Latency** (10 queries, full pipeline incl. rerank):
+
+| | P50 | P95 |
+|---|---|---|
+| cache miss (cold) | ~11.2 s | ~30.6 s |
+| retrieval-cache hit (same query) | ~0.05 s | — |
+
+**Generation — RAGAS classic metrics** (8-question sample, `n_generations=1`,
+dense retrieval):
+
+| metric | Writer | Writer + Critic |
+|---|---|---|
+| faithfulness | 0.900 | 0.900 |
+| answer_relevancy | 0.836 | 0.852 |
+| context_precision | 0.833 | 0.830 |
+| context_recall | 0.875 | 0.875 |
+| citation_precision | 0.854 | 0.812 |
+| citation_recall | 0.875 | 0.750 |
+
+*Caveat:* this run **surfaced a real bug** — Gemini wraps/truncates the Critic's
+JSON, so the fail-closed Critic was unavailable on half the calls during the
+sample and no significant Writer+Critic difference was measurable. That bug was
+fixed afterwards (`_parse_critic_json` strips code fences + extracts the object,
+`CRITIC_MAX_TOKENS` 300→600; verified 4/5 real calls) — a follow-up run is the
+next step.
+
+**Citation accuracy** (deterministic sanitizer): **100%** (4/4 samples).
+
 ### 🧠 Multi-agent & citation integrity
 
 - **Multi-agent orchestration** — Router → Retriever → Writer → Critic
