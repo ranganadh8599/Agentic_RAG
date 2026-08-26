@@ -1,8 +1,8 @@
 # Agentic RAG - hybrid retrieval pipeline.
 
-from app.retrieval.cache import (clear_retrieval_cache, retrieval_cache_lookup,
-                                 retrieval_cache_store, semantic_cache_lookup,
-                                 semantic_cache_store)
+from app.retrieval.cache import (clear_retrieval_cache, clear_semantic_cache,
+                                 retrieval_cache_lookup, retrieval_cache_store,
+                                 semantic_cache_lookup, semantic_cache_store)
 from app.retrieval.dense import embed_query, vector_search
 from app.retrieval.fusion import rrf_fuse
 from app.retrieval.hybrid import filename_search, keyword_search, retrieve
@@ -15,4 +15,5 @@ __all__ = [
     "keyword_search", "filename_search", "rrf_fuse", "expand_query",
     "rerank", "semantic_cache_lookup", "semantic_cache_store",
     "retrieval_cache_lookup", "retrieval_cache_store", "clear_retrieval_cache",
+    "clear_semantic_cache",
 ]

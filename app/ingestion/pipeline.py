@@ -102,18 +102,19 @@ def _build_chunks(conn, doc_id: int, sections, chunk_size: int, chunk_overlap: i
 def _chunk_insert(doc_id, content, meta, embedding, content_hash, sparse_vec, token_count):
     """SQL + params to insert a chunk row. Sparse columns are referenced ONLY
     when the schema has them (pgvector >= 0.7); otherwise omitted so ingest
-    still works on older pgvector (SPARSE_READY=False)."""
+    still works on older pgvector (SPARSE_READY=False). Returns the new row id
+    (RETURNING id) so delta updates can keep an exact "keep" list."""
     if db.SPARSE_READY:
         return (
             "INSERT INTO chunks (document_id, content, chunk_index, metadata, embedding, "
             "content_hash, sparse_embedding, token_count) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
             (doc_id, content, meta.get("chunk"), db.to_json(meta), db.to_db_vec(embedding),
              content_hash, sparse_vec, token_count),
         )
     return (
         "INSERT INTO chunks (document_id, content, chunk_index, metadata, embedding, content_hash) "
-        "VALUES (%s, %s, %s, %s, %s, %s)",
+        "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
         (doc_id, content, meta.get("chunk"), db.to_json(meta), db.to_db_vec(embedding),
          content_hash),
     )
@@ -124,9 +125,14 @@ def _delta_update(conn, doc_id: int, sections, chunk_size: int, chunk_overlap: i
     """Re-ingest a document, reusing unchanged chunks and embedding only the
     changed ones. Returns (stored, reused, removed) counts.
 
-    Two chunks count as identical when their sanitized text hashes to the same
-    sha256 (content_hash) — safe because chunking is deterministic, so unchanged
-    sections always produce byte-identical chunks.
+    Matching is count-aware and metadata-aware so delta updates stay correct in
+    two subtle cases:
+      * duplicate identical chunks are matched ONE-TO-ONE (old "A A" -> new
+        "A A" reuses both rows; old "A A" -> new "A" deletes the stale
+        duplicate) — a plain hash->id map would silently collapse them;
+      * a reused chunk's metadata (page / section / chunk ordinal) is refreshed
+        from the new payload, so citations never point at stale locations when
+        the same text moves between pages/sections.
     """
     # Flatten chunks WITHOUT storing images yet — images are stored below only
     # for sections whose content actually changed (avoids orphaned blobs on
@@ -147,25 +153,53 @@ def _delta_update(conn, doc_id: int, sections, chunk_size: int, chunk_overlap: i
     metas = [m for _s, _t, m in payload]
     new_hashes = [hashlib.sha256(c.encode("utf-8")).hexdigest() for c in texts]
 
-    # Load existing chunk hashes, backfilling any that predate the column so a
-    # first delta on an old corpus is still efficient.
+    # Load existing chunks, backfilling any that predate the content_hash column
+    # so a first delta on an old corpus is still efficient.
     with conn.cursor() as cur:
-        cur.execute("SELECT id, content, content_hash FROM chunks WHERE document_id = %s", (doc_id,))
+        cur.execute(
+            "SELECT id, content, content_hash, chunk_index, metadata "
+            "FROM chunks WHERE document_id = %s", (doc_id,))
         existing_rows = cur.fetchall()
-    existing: dict[str, int] = {}
+    # Group existing ids by content hash (multi-set, order preserved) so
+    # duplicate identical chunks are matched one-for-one instead of collapsing.
+    existing_by_hash: dict[str, list[int]] = {}
+    id_to_meta: dict[int, dict] = {}
     backfill = []
     for r in existing_rows:
         h = r["content_hash"]
         if not h:
             h = hashlib.sha256((r["content"] or "").encode("utf-8")).hexdigest()
             backfill.append((h, r["id"]))
-        existing[h] = r["id"]
+        existing_by_hash.setdefault(h, []).append(r["id"])
+        id_to_meta[r["id"]] = r["metadata"] or {}
     if backfill:
         with conn.cursor() as cur:
             cur.executemany("UPDATE chunks SET content_hash = %s WHERE id = %s", backfill)
 
-    reused = sum(1 for h in new_hashes if h in existing)
-    to_embed = [i for i, h in enumerate(new_hashes) if h not in existing]
+    # One-to-one match: for each new chunk, claim an unused existing row with
+    # the same content hash (preferring the same chunk ordinal so row identity
+    # stays stable across re-orders). Anything unclaimed is a new chunk.
+    reuse: dict[int, int] = {}   # new index -> existing chunk id
+    used: set[int] = set()
+    to_embed: list[int] = []
+    for i, h in enumerate(new_hashes):
+        pick = None
+        pool = existing_by_hash.get(h) or []
+        for cid in pool:  # prefer same chunk ordinal
+            if cid not in used and id_to_meta.get(cid, {}).get("chunk") == metas[i].get("chunk"):
+                pick = cid
+                break
+        if pick is None:
+            for cid in pool:  # any unused row with this hash
+                if cid not in used:
+                    pick = cid
+                    break
+        if pick is not None:
+            used.add(pick)
+            reuse[i] = pick
+        else:
+            to_embed.append(i)
+    reused = len(reuse)
 
     # Store images ONLY for sections whose FIRST chunk is new (a reused first
     # chunk already references an image). This matches fresh-ingest display
@@ -179,6 +213,7 @@ def _delta_update(conn, doc_id: int, sections, chunk_size: int, chunk_overlap: i
 
     # Embed + store ONLY the changed chunks (batched, incremental).
     stored = 0
+    inserted_ids: list[int] = []
     batch = settings.EMBED_BATCH_SIZE
     for start in range(0, len(to_embed), batch):
         idxs = to_embed[start:start + batch]
@@ -193,21 +228,40 @@ def _delta_update(conn, doc_id: int, sections, chunk_size: int, chunk_overlap: i
                     doc_id, texts[i], metas[i], e, new_hashes[i],
                     sparse_vecs[k], token_counts[k])
                 cur.execute(sql, params)
+                inserted_ids.append(cur.fetchone()["id"])
         stored += len(embeddings)
         pct = min(95, 30 + round(65 * stored / max(len(to_embed), 1)))
         msg = f"  ...updated {stored}/{len(to_embed)} changed chunks"
         _report(progress, on_progress, "embedding", pct, msg)
 
-    # Drop chunks that no longer appear in the new content.
+    # Refresh metadata on reused rows so page/section/ordinal stay current even
+    # when the text is unchanged (moved between pages, renumbered sections).
+    if reuse:
+        with conn.cursor() as cur:
+            for i, cid in reuse.items():
+                cur.execute(
+                    "UPDATE chunks SET metadata = %s, chunk_index = %s WHERE id = %s",
+                    (db.to_json(metas[i]), metas[i].get("chunk"), cid))
+
+    # Drop existing rows that were neither reused nor newly inserted. Deletion
+    # is by ROW ID (not by hash), so duplicate identical chunks are handled one
+    # row at a time and a stale duplicate is never kept just because its text
+    # hash still exists elsewhere.
     removed = 0
     removed_contents = []
+    keep_ids = list(used) + inserted_ids
     with conn.cursor() as cur:
-        cur.execute(
-            "DELETE FROM chunks WHERE document_id = %s "
-            "AND (content_hash IS NULL OR content_hash <> ALL(%s)) "
-            "RETURNING content",
-            (doc_id, new_hashes),
-        )
+        if keep_ids:
+            cur.execute(
+                "DELETE FROM chunks WHERE document_id = %s AND id <> ALL(%s) "
+                "RETURNING content",
+                (doc_id, keep_ids),
+            )
+        else:
+            cur.execute(
+                "DELETE FROM chunks WHERE document_id = %s RETURNING content",
+                (doc_id,),
+            )
         removed_contents = [r["content"] for r in cur.fetchall()]
         removed = len(removed_contents)
     # Keep sparse term statistics consistent with the removed chunks.
@@ -314,6 +368,7 @@ def ingest_file(path: str, title: str | None = None, progress=print,
                f"{reused} unchanged, -{removed} removed")
         _report(progress, on_progress, "done", 100, msg)
         retrieval.clear_retrieval_cache()
+        retrieval.clear_semantic_cache(collection_id=collection_id)
         return existing_id, stored, {"mode": "updated", "reused": reused, "removed": removed}
 
     try:
@@ -382,10 +437,11 @@ def ingest_file(path: str, title: str | None = None, progress=print,
 
     _report(progress, on_progress, "done", 100, f"  + {title}: {stored} chunks stored")
 
-    # New content can make cached reranked chunk lists stale (chunk ids change),
-    # so drop the retrieval cache and let popular queries re-run against fresh
-    # data.
+    # New content can make cached reranked chunk lists AND cached full answers
+    # stale, so invalidate both (scoped to this collection) and let popular
+    # queries re-run against fresh data.
     retrieval.clear_retrieval_cache()
+    retrieval.clear_semantic_cache(collection_id=collection_id)
     return doc_id, stored, {"mode": "ingested"}
 
 

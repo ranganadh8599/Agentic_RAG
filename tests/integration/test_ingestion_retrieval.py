@@ -37,3 +37,48 @@ def test_retrieve_reports_latency_breakdown(db_ready, unique_collection, ingest_
                              collection=unique_collection, use_cache=False)
     lat = res.get("latency_ms") or {}
     assert "stage1" in lat and "total" in lat
+
+
+def test_delta_update_matches_duplicates_and_refreshes_metadata(db_ready, unique_collection):
+    """Delta updates must match duplicate identical chunks ONE-TO-ONE and refresh
+    reused chunks' metadata (page/section) — regression for the hash-only matching
+    bug flagged in the v1.0.2 review."""
+    import app.ingestion.pipeline as ingest
+
+    coll_id = db.get_or_create_collection(unique_collection)
+    conn = db.get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO documents (collection_id, title, source_type) "
+                "VALUES (%s, %s, 'txt') RETURNING id", (coll_id, "dup.txt"))
+            doc_id = cur.fetchone()["id"]
+
+        def section(page):
+            return {"text": "The revenue was ten million dollars. ",
+                    "metadata": {"page": page, "section": "s"}}
+
+        # Two sections with byte-identical text -> two identical chunks stored.
+        assert ingest._delta_update(
+            conn, doc_id, [section(3), section(5)], 40, 0) == (2, 0, 0)
+        with conn.cursor() as cur:
+            cur.execute("SELECT count(*) AS n FROM chunks WHERE document_id = %s", (doc_id,))
+            assert cur.fetchone()["n"] == 2
+
+        # Removing ONE duplicate deletes exactly one stale row (not both) and
+        # the survivor inherits the NEW page metadata.
+        assert ingest._delta_update(conn, doc_id, [section(5)], 40, 0) == (0, 1, 1)
+        with conn.cursor() as cur:
+            cur.execute("SELECT metadata FROM chunks WHERE document_id = %s", (doc_id,))
+            rows = cur.fetchall()
+        assert len(rows) == 1
+        assert rows[0]["metadata"]["page"] == 5
+
+        # Re-adding the duplicate grows the set again (one reuse, one insert).
+        assert ingest._delta_update(
+            conn, doc_id, [section(3), section(5)], 40, 0) == (1, 1, 0)
+        with conn.cursor() as cur:
+            cur.execute("SELECT count(*) AS n FROM chunks WHERE document_id = %s", (doc_id,))
+            assert cur.fetchone()["n"] == 2
+    finally:
+        conn.close()

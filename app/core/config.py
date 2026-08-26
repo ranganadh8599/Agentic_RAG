@@ -143,12 +143,14 @@ class Settings:
     # stage 2 (cross-encoder) rescores each [query, chunk] pair jointly and
     # picks the final TOP_K. Much more accurate ordering, small latency cost.
     USE_RERANKER: bool = os.getenv("USE_RERANKER", "1") == "1"
-    # Any sentence-transformers cross-encoder. Good defaults:
+    # Any sentence-transformers cross-encoder. Default is the CPU-friendly
+    # 0.6B model (matches the README + docker-compose); the 4B is a heavier
+    # GPU-only upgrade for offline/batch eval:
+    #   "Qwen/Qwen3-Reranker-0.6B"             (default: CPU-friendly, ~1.1GB)
     #   "Qwen/Qwen3-Reranker-4B"               (SOTA multilingual, ~8GB, needs GPU)
-    #   "Qwen/Qwen3-Reranker-0.6B"             (CPU-friendly Qwen reranker)
     #   "BAAI/bge-reranker-base"               (solid, smaller)
     #   "cross-encoder/ms-marco-MiniLM-L-6-v2" (tiny fallback, ~80MB)
-    RERANKER_MODEL: str = os.getenv("RERANKER_MODEL", "Qwen/Qwen3-Reranker-4B")
+    RERANKER_MODEL: str = os.getenv("RERANKER_MODEL", "Qwen/Qwen3-Reranker-0.6B")
     # Truncation for [query, chunk] pairs. Our chunks run up to ~2500 chars
     # (~600 tokens), so 1024 keeps long structured docs intact (Qwen3 supports 32k).
     RERANKER_MAX_LENGTH: int = int(os.getenv("RERANKER_MAX_LENGTH", "1024"))
@@ -156,11 +158,12 @@ class Settings:
     # it's injected via the model's prompt template (Qwen measures ~1-5% gains).
     # Leave empty to use the model's built-in default instruction.
     RERANKER_INSTRUCTION: str = os.getenv("RERANKER_INSTRUCTION", "")
-    # How many fused candidates to send to the cross-encoder. Starting point: 50.
+    # How many fused candidates to send to the cross-encoder. Starting point: 20
+    # (matches the README + .env; interactive-friendly with the 0.6B model).
     # Tune after measuring (see benchmark_rerank.py): larger = better recall at
     # higher rerank latency, smaller = faster. Sweep with
     #   python benchmark_rerank.py --sizes 10,25,50,100,200
-    RERANKER_CANDIDATES: int = int(os.getenv("RERANKER_CANDIDATES", "50"))
+    RERANKER_CANDIDATES: int = int(os.getenv("RERANKER_CANDIDATES", "20"))
     # Pairs scored per forward pass (lower if GPU/CPU memory is tight).
     RERANKER_BATCH_SIZE: int = int(os.getenv("RERANKER_BATCH_SIZE", "32"))
 
@@ -230,6 +233,19 @@ class Settings:
     # own counter, so the effective limit is N x the configured value.
     AUTH_RATE_LIMIT: int = int(os.getenv("AUTH_RATE_LIMIT", "10"))
     AUTH_RATE_WINDOW: int = int(os.getenv("AUTH_RATE_WINDOW", "60"))
+
+    # --- Auth hardening ---
+    # Minimum accepted password length (register + change-password). PBKDF2 is
+    # fine for a demo; for production consider a memory-hard KDF (Argon2id /
+    # scrypt) — hashlib.scrypt is stdlib and a drop-in if you want it.
+    AUTH_MIN_PASSWORD_LEN: int = int(os.getenv("AUTH_MIN_PASSWORD_LEN", "8"))
+    # PBKDF2-HMAC-SHA256 work factor. ~600k iterations costs ~0.3-0.6s per
+    # attempt (far slower to brute-force than 100k). Tests lower this via env.
+    PBKDF2_ITERATIONS: int = int(os.getenv("PBKDF2_ITERATIONS", "600000"))
+    # Only honor X-Forwarded-For when behind a trusted reverse proxy that
+    # strips/replaces it (nginx, Cloudflare, ...). Off by default so a client
+    # cannot spoof its IP and bypass the auth rate limit.
+    TRUST_PROXY_HEADERS: bool = os.getenv("TRUST_PROXY_HEADERS", "0") == "1"
 
     # --- Web / API ---
     # CORS allowed origins (comma-separated). The web UI is served same-origin

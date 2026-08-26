@@ -51,7 +51,8 @@ def _oid(s):
 
 
 def _hash(password, salt):
-    return hashlib.pbkdf2_hmac("sha256", password.encode(), salt, 100_000)
+    return hashlib.pbkdf2_hmac(
+        "sha256", password.encode(), salt, settings.PBKDF2_ITERATIONS)
 
 
 # ---------------------------------------------------------------------------
@@ -62,8 +63,9 @@ def register_user(username: str, display_name: str | None, password: str) -> dic
     username = (username or "").strip().lower()
     if not username or not password:
         raise ValueError("username and password are required")
-    if len(password) < 4:
-        raise ValueError("password must be at least 4 characters")
+    if len(password) < settings.AUTH_MIN_PASSWORD_LEN:
+        raise ValueError(
+            f"password must be at least {settings.AUTH_MIN_PASSWORD_LEN} characters")
     salt = os.urandom(16)
     doc = {
         "username": username,
@@ -116,8 +118,9 @@ def change_password(user_id: str, current_password: str, new_password: str,
         dk = _hash(current_password, bytes.fromhex(user["password_salt"]))
         if not hmac.compare_digest(dk.hex(), user["password_hash"]):
             return {"ok": False, "error": "current password is incorrect"}
-        if not new_password or len(new_password) < 4:
-            return {"ok": False, "error": "new password must be at least 4 characters"}
+        if not new_password or len(new_password) < settings.AUTH_MIN_PASSWORD_LEN:
+            return {"ok": False,
+                    "error": f"new password must be at least {settings.AUTH_MIN_PASSWORD_LEN} characters"}
         salt = os.urandom(16)
         _users.update_one(
             {"_id": user["_id"]},

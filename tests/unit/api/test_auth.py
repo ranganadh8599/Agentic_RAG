@@ -65,3 +65,30 @@ def test_login_wrong_password(client):
 
 def test_me_requires_auth(client):
     assert client.get("/api/me").status_code == 401
+
+
+def test_register_password_min_length_enforced(client):
+    # 7 chars < configured minimum (8) -> rejected
+    r = client.post("/api/register", json={"username": _user(), "password": "abcdefg"})
+    assert r.status_code == 409
+    # exactly the configured minimum -> accepted
+    r = client.post("/api/register", json={"username": _user(), "password": "abcdefgh"})
+    assert r.status_code == 200
+
+
+def test_client_ip_ignores_spoofed_xff_unless_proxy_trusted(monkeypatch):
+    from types import SimpleNamespace
+
+    from app.api.dependencies import client_ip
+    from app.core.config import settings
+
+    req = SimpleNamespace(
+        headers={"x-forwarded-for": "6.6.6.6"},
+        client=SimpleNamespace(host="127.0.0.1"),
+    )
+    # Default (no trusted proxy): a spoofed X-Forwarded-For header is ignored.
+    monkeypatch.setattr(settings, "TRUST_PROXY_HEADERS", False)
+    assert client_ip(req) == "127.0.0.1"
+    # Behind a trusted proxy the header is honored.
+    monkeypatch.setattr(settings, "TRUST_PROXY_HEADERS", True)
+    assert client_ip(req) == "6.6.6.6"

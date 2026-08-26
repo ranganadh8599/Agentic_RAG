@@ -31,6 +31,7 @@ os.environ.setdefault("USE_QUERY_REWRITE", "0")
 os.environ.setdefault("GENERAL_STRONG_THRESHOLD", "0.1")
 os.environ.setdefault("RELEVANCE_FLOOR", "-1.0")     # mock-embedding results always pass
 os.environ.setdefault("METADATA_FILTER_MODE", "pre")
+os.environ.setdefault("PBKDF2_ITERATIONS", "1000")   # keep auth hashing fast in tests
 
 
 @pytest.fixture(scope="session")

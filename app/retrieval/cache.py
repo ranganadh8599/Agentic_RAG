@@ -185,3 +185,21 @@ def clear_retrieval_cache():
             cur.execute("DELETE FROM retrieval_cache")
     except Exception:  # noqa: BLE001
         pass
+
+
+def clear_semantic_cache(collection_id: int | None = None):
+    """Drop cached full answers, scoped to a collection when known.
+
+    Called after ingestion/updates: the semantic cache stores complete generated
+    answers keyed by query embedding, so without this an updated document could
+    keep returning the OLD answer for a semantically similar query.
+    """
+    try:
+        with db.get_conn().cursor() as cur:
+            if collection_id is None:
+                cur.execute("DELETE FROM semantic_cache")
+            else:
+                cur.execute("DELETE FROM semantic_cache WHERE collection_id = %s",
+                            (collection_id,))
+    except Exception:  # noqa: BLE001
+        log.warning("could not clear semantic cache", exc_info=True)

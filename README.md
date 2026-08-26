@@ -448,9 +448,13 @@ Also configurable (defaults shown): `MAX_CRITIC_ROUNDS` (2), `ROUTER_MAX_TOKENS`
 query (falls back to per-call connections if the package is missing).
 **Auth rate limiting:** `AUTH_RATE_LIMIT` (10) login/register attempts per
 `AUTH_RATE_WINDOW` (60) seconds per client IP → `429` (per-process counter, so
-`N` workers = `N×` the limit). **Web/API:** `CORS_ORIGINS` (`*`, comma-separated;
-bearer auth keeps cookies off, so `*` is acceptable) and `PAGE_LIMIT_CAP`
-(1000) — the hard cap on `?limit=` for list endpoints.
+`N` workers = `N×` the limit). **Auth hardening:** `AUTH_MIN_PASSWORD_LEN` (8),
+`PBKDF2_ITERATIONS` (600000 — work factor for password hashing; lower in tests
+for speed), and `TRUST_PROXY_HEADERS` (0 — only honor `X-Forwarded-For` when
+behind a trusted reverse proxy, so a client can't spoof its IP to bypass the
+rate limit; enable it behind nginx/Cloudflare). **Web/API:** `CORS_ORIGINS`
+(`*`, comma-separated; bearer auth keeps cookies off, so `*` is acceptable) and
+`PAGE_LIMIT_CAP` (1000) — the hard cap on `?limit=` for list endpoints.
 
 **Two-stage retrieval & reranking:** `USE_RERANKER` (1), `RERANKER_MODEL`
 (`Qwen/Qwen3-Reranker-0.6B`), `RERANKER_CANDIDATES` (20), `RERANKER_BATCH_SIZE`

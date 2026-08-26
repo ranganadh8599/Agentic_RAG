@@ -61,10 +61,17 @@ _auth_lock = Lock()
 
 
 def client_ip(request: Request) -> str:
-    """Best-effort client IP, honoring X-Forwarded-For when behind a proxy."""
-    fwd = request.headers.get("x-forwarded-for", "")
-    if fwd:
-        return fwd.split(",")[0].strip()
+    """Best-effort client IP.
+
+    X-Forwarded-For is honored ONLY when TRUST_PROXY_HEADERS is set (the app
+    runs behind a trusted reverse proxy that strips/replaces the header).
+    Otherwise the raw socket peer is used, so a client cannot spoof its IP to
+    bypass the auth rate limit.
+    """
+    if settings.TRUST_PROXY_HEADERS:
+        fwd = request.headers.get("x-forwarded-for", "")
+        if fwd:
+            return fwd.split(",")[0].strip()
     return request.client.host if request.client else "unknown"
 
 
