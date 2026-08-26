@@ -48,6 +48,16 @@ def test_review_accepts_markdown_fenced_json(monkeypatch):
     assert issues == []
 
 
+def test_review_accepts_json_wrapped_in_prose(monkeypatch):
+    # Regression: some models add prose around the JSON object; the critic must
+    # extract the {...} substring instead of fail-closing.
+    prose = 'Here is the review: {"verdict": "fail", "issues": ["x"]} -- done'
+    monkeypatch.setattr("app.agents.critic.chat_text", _fake(prose))
+    ok, issues = CriticAgent().review("q", "context", "answer")
+    assert ok is False
+    assert issues == ["x"]
+
+
 def test_review_llm_error_raises(monkeypatch):
     def boom(messages, **kw):
         raise RuntimeError("LLM down")

@@ -12,16 +12,24 @@ log = logging.getLogger("agents")
 
 
 def _parse_critic_json(resp: str) -> dict:
-    """Parse the critic's JSON reply, tolerating markdown code fences.
+    """Parse the critic's JSON reply, tolerating markdown fences and prose.
 
-    Some providers (e.g. Gemini) wrap the JSON reply in ```json ... ```
-    fences; a plain json.loads would fail-CLOSE on every call. Strip the
-    fence, then parse. Truly malformed output still raises (fail closed)."""
+    Providers (e.g. Gemini) sometimes wrap the JSON in ```json ... ``` fences
+    or add prose around the object; a plain json.loads would fail-CLOSE on
+    every such call. Strip fences, and if direct parsing fails, retry on the
+    object between the first { and the last }. Truly malformed output (e.g.
+    truncated mid-string) still raises, so the critic stays fail-CLOSED."""
     text = (resp or "").strip()
     if text.startswith("```"):
         text = re.sub(r"^```[A-Za-z]*\s*", "", text)
         text = re.sub(r"\s*```$", "", text)
-    return json.loads(text)
+    try:
+        return json.loads(text)
+    except ValueError:
+        start, end = text.find("{"), text.rfind("}")
+        if start != -1 and end > start:
+            return json.loads(text[start:end + 1])
+        raise
 
 
 class CriticUnavailableError(Exception):

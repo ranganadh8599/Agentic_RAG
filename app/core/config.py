@@ -120,7 +120,9 @@ class Settings:
     # Temperature-0 classification is deterministic, so caching is safe.
     ROUTER_CACHE_SIZE: int = int(os.getenv("ROUTER_CACHE_SIZE", "256"))
     ROUTER_MAX_TOKENS: int = int(os.getenv("ROUTER_MAX_TOKENS", "100"))
-    CRITIC_MAX_TOKENS: int = int(os.getenv("CRITIC_MAX_TOKENS", "300"))
+    # Gemini can truncate long JSON verdicts at 300 tokens; 600 leaves room
+    # for the full issues[] array and avoids fail-closed critic calls.
+    CRITIC_MAX_TOKENS: int = int(os.getenv("CRITIC_MAX_TOKENS", "600"))
     # A "padding" citation is pruned when its chunk shares less than this
     # fraction of the claim's significant words.
     CITATION_OVERLAP_THRESHOLD: float = float(os.getenv("CITATION_OVERLAP_THRESHOLD", "0.25"))
