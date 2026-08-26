@@ -7,8 +7,7 @@
 pythonpath = ["."]
 # Only collect tests under tests/ (root test_*.py are standalone dev scripts).
 testpaths = ["tests"]
-# Only collect files named test_*.py — tests/e2e_test.py is a standalone
-# script that requires a live server and is not a pytest module.
+# Only collect files named test_*.py.
 python_files = ["test_*.py"]
 # Keep the default suite fast/hermetic; RAG evaluation needs real models and
 # is opt-in via `pytest -m evaluation`.

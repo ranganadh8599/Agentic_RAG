@@ -554,24 +554,6 @@ Structure: `tests/unit` (component correctness) · `tests/unit/api` (HTTP) ·
 workflows) · `tests/architecture` (dependency contracts) · `tests/evaluation`
 (retrieval / generation / citations / benchmarks, opt-in).
 
-### Standalone end-to-end script (needs the API server on port 8000)
-
-Run the end-to-end edge-case suite (needs the API server running on port 8000):
-
-```powershell
-& .\.venv\Scripts\python.exe tests\e2e_test.py
-```
-
-87 cases across 11 sections: **A** query/answer ground truth + citation
-integrity + greeting routing (greetings skip RAG; greeting+question still RAG),
-**B** collection isolation, **C** ingestion edge cases, **D** API robustness,
-**E** registration & login, **F** session validation, **G** auth'd chat &
-conversation scoping (incl. sources persisted with each assistant message),
-**H** cross-user history isolation (403/404/delete), **I** conversation memory
-persistence (multi-turn), **J** password change & logout, **K** health/Mongo
-integration. It exits non-zero on any failure, so it works as a pre-commit gate
-before shipping new features.
-
 ## Requirements
 
 - Python 3.10+
