@@ -200,9 +200,9 @@ python -m pytest -m evaluation
 ```
 
 (Requires real `EMBEDDING_MODEL` / `LLM_MODEL` in `.env` and the corpus
-ingested. Standalone scripts for deeper runs — candidate-pool sweeps and FTS
-A/B — remain at the repo root as `benchmark_rerank.py`, `recall_check.py`, and
-`eval_ragas.py`.)
+ingested. Deeper one-off runs — candidate-pool sweeps, FTS A/B, judged dataset
+recalls — use the local-only dev scripts `benchmark_rerank.py`,
+`recall_check.py`, and `eval_ragas.py`; these are kept out of version control.)
 
 ### 🧠 Multi-agent & citation integrity
 
