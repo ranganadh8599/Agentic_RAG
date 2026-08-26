@@ -247,10 +247,16 @@ def add_message(conversation_id: str, role: str, content: str, embedding=None,
         pass
 
 
-def get_conversations(user_id: str) -> list[dict]:
+def get_conversations(user_id: str, limit: int | None = None,
+                      offset: int | None = None) -> list[dict]:
     try:
-        convs = list(_conversations.find({"user_id": user_id})
-                     .sort([("created_at", -1), ("_id", -1)]))
+        q = _conversations.find({"user_id": user_id}) \
+            .sort([("created_at", -1), ("_id", -1)])
+        if offset and offset > 0:
+            q = q.skip(offset)
+        if limit and limit > 0:
+            q = q.limit(limit)
+        convs = list(q)
         out = []
         for c in convs:
             first = _messages.find_one(
