@@ -259,7 +259,14 @@ python cli.py ask "What is the revenue mentioned in the report?"
 python cli.py ask "..." --collection hr                  # search only the 'hr' table
 python cli.py chat                                        # interactive chat
 
-# 5. Start MongoDB (users + chat history)
+# 5. Roles — how a user becomes admin
+#    Admin:        sees the shared corpus (admin/CLI uploads), global cache.
+#    Normal user:  sees the shared corpus + their own uploads, own cache.
+#    New users are normal by default; promote/revoke with:
+python cli.py admin alice                    # grant admin to alice
+python cli.py admin alice --remove           # revoke admin from alice
+
+# 6. Start MongoDB (users + chat history)
 #    Portable install: extract https://fastdl.mongodb.org/windows/mongodb-windows-x86_64-8.3.8.zip to C:\mongodb
 C:\mongodb\mongodb-win32-x86_64-windows-8.3.8\bin\mongod.exe --dbpath C:\mongodb\data --port 27017 --bind_ip 127.0.0.1
 #    NOTE: mongod is a manual background process (not a service) — start it again after a reboot.
