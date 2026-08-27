@@ -56,7 +56,13 @@ have uploaded unless they are explicitly shown."""
 REWRITE_PROMPT = """You are a search-query rewriter for a RAG system. A user is
 having a multi-turn conversation with a document Q&A assistant.
 
-Here is the recent conversation history (most recent last):
+The history has TWO parts:
+- "Recent:" — the last few turns, most recent last.
+- "Also relevant from earlier:" — earlier turns topically related to the latest
+  question (NOT in chronological order).
+The subject of a follow-up may only appear in the "relevant from earlier" part,
+so scan BOTH parts before deciding.
+
 <history>
 {transcript}
 </history>
@@ -68,15 +74,22 @@ And here is the user's LATEST question:
 
 Your job: produce ONE standalone search query that captures the user's actual
 intent, resolving any pronouns ("it", "they", "this", "the person"), ellipsis,
-or references that only make sense with the history (e.g. "what does it do?" ->
-"What does RAGAS do?"). Preserve any technical terms, names, codes or acronyms
-from the history EXACTLY.
+or references that only make sense with the history. If the latest question has
+an IMPLICIT subject — e.g. "which new markets?", "what about the revenue?",
+"who leads it?" — complete it with the entity/name it refers to from the
+history so the output is fully standalone. Preserve any technical terms, names,
+codes or acronyms from the history EXACTLY.
+
+Examples:
+- "what does it do?" -> "What does RAGAS do?"
+- "which new markets?" (history discusses Acme Analytics' market expansion)
+  -> "Which new markets did Acme Analytics expand into?"
 
 Rules:
-- If the latest question is ALREADY self-contained and would make sense with no
-  history (a clear subject, no dangling pronouns/references), return it
-  UNCHANGED, verbatim.
-- Otherwise rewrite it into a clear, standalone question/query.
+- If the latest question ALREADY names its subject and needs no history, return
+  it UNCHANGED, verbatim.
+- Otherwise rewrite it into a clear, standalone question/query that includes the
+  subject it refers to.
 - Do NOT answer the question. Do NOT add commentary, quotes, or explanations.
 - Output ONLY the final query text on a single line."""
 

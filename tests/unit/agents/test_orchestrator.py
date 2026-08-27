@@ -112,12 +112,17 @@ def test_rewrite_query_resolves_followup(monkeypatch):
     agent = OrchestratorAgent()
     # rewrite is off in the test env → re-enable for this unit test.
     monkeypatch.setattr("app.agents.orchestrator.settings.USE_QUERY_REWRITE", True)
+    monkeypatch.setattr("app.agents.orchestrator.retrieval.embed_query",
+                        lambda q: [0.1, 0.2])
     monkeypatch.setattr(
-        "app.agents.orchestrator.memory.get_recent",
-        lambda conv, k=8: [
-            {"role": "user", "content": "What is RAG?"},
-            {"role": "assistant", "content": "RAG is a framework."},
-        ])
+        "app.agents.orchestrator.memory.get_smart_context",
+        lambda conv, qe, recent_k=8, relevant_k=5: {
+            "recent": [
+                {"role": "user", "content": "What is RAG?"},
+                {"role": "assistant", "content": "RAG is a framework."},
+            ],
+            "relevant": [],
+        })
     monkeypatch.setattr("app.agents.orchestrator.chat_text",
                         lambda messages, **kw: "How does RAG work?")
 
@@ -128,6 +133,45 @@ def test_rewrite_query_resolves_followup(monkeypatch):
 def test_rewrite_query_unchanged_without_history(monkeypatch):
     agent = OrchestratorAgent()
     monkeypatch.setattr("app.agents.orchestrator.settings.USE_QUERY_REWRITE", True)
-    monkeypatch.setattr("app.agents.orchestrator.memory.get_recent",
-                        lambda conv, k=8: [])
+    monkeypatch.setattr("app.agents.orchestrator.retrieval.embed_query",
+                        lambda q: [0.1, 0.2])
+    monkeypatch.setattr(
+        "app.agents.orchestrator.memory.get_smart_context",
+        lambda conv, qe, recent_k=8, relevant_k=5: {"recent": [], "relevant": []})
     assert agent._rewrite_query("What is RAG?", "conv1") == "What is RAG?"
+
+
+def test_rewrite_query_uses_relevant_context(monkeypatch):
+    """A follow-up whose subject is only in an EARLIER (relevant) turn must still
+    see that subject — e.g. 'which new markets?' after the Acme expansion was
+    discussed several turns back (recent-only window misses it)."""
+    agent = OrchestratorAgent()
+    monkeypatch.setattr("app.agents.orchestrator.settings.USE_QUERY_REWRITE", True)
+    monkeypatch.setattr("app.agents.orchestrator.retrieval.embed_query",
+                        lambda q: [0.1, 0.2])
+    monkeypatch.setattr(
+        "app.agents.orchestrator.memory.get_smart_context",
+        lambda conv, qe, recent_k=8, relevant_k=5: {
+            "recent": [
+                {"role": "assistant",
+                 "content": "The multi-agent RAG system should have semantic caching."},
+            ],
+            "relevant": [
+                {"role": "user", "content": "Which new markets did Acme Analytics expand into?"},
+                {"role": "assistant",
+                 "content": "Acme Analytics expanded into Germany, Japan, and Brazil."},
+            ],
+        })
+    seen = {}
+
+    def fake_chat(messages, **kw):
+        seen["sys"] = messages[0]["content"]
+        return "Which new markets did Acme Analytics expand into?"
+
+    monkeypatch.setattr("app.agents.orchestrator.chat_text", fake_chat)
+
+    out = agent._rewrite_query("which new markets?", "conv1")
+    assert out == "Which new markets did Acme Analytics expand into?"
+    # The rewriter must have been shown the relevant context containing the subject.
+    assert "Also relevant from earlier" in seen["sys"]
+    assert "Acme Analytics" in seen["sys"]

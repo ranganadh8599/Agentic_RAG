@@ -168,6 +168,17 @@ class Settings:
     RERANKER_CANDIDATES: int = int(os.getenv("RERANKER_CANDIDATES", "20"))
     # Pairs scored per forward pass (lower if GPU/CPU memory is tight).
     RERANKER_BATCH_SIZE: int = int(os.getenv("RERANKER_BATCH_SIZE", "32"))
+    # Rerank-confidence floor: cross-encoder candidates whose sigmoid confidence
+    # is below this value are dropped from the SERVED pool (clear retrieval
+    # noise). 0.0 = disabled (default, current behavior). Measured 2026-08-27 on
+    # the E2E judged set: the top-5 pool carries ~0.27 retrieval precision@5; a
+    # 0.5 floor raises it to ~0.37 with zero recall loss (relevant chunks are
+    # always conf >= 0.99). Residual noise above the floor (topically-similar
+    # docs, conf 0.98+) is a 0.6B-reranker limitation the floor cannot remove.
+    RERANK_CONFIDENCE_FLOOR: float = float(os.getenv("RERANK_CONFIDENCE_FLOOR", "0.0"))
+    # Always serve at least this many chunks (topped up from the best below the
+    # floor) so weak matches still give the Writer something to ground on.
+    RERANK_CONFIDENCE_MIN_KEEP: int = int(os.getenv("RERANK_CONFIDENCE_MIN_KEEP", "2"))
 
     # --- Retrieval-results cache (popular queries) ---
     # Caches the RERANKED chunk list per query, so common questions skip the

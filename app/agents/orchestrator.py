@@ -61,13 +61,24 @@ class OrchestratorAgent:
         if not settings.USE_QUERY_REWRITE or not conversation_id:
             return query
         try:
-            # Called BEFORE the current turn is persisted, so get_recent holds
-            # only PRIOR turns. At least one prior exchange is required for a
-            # rewrite to make sense (turn 1 has no history -> no rewrite).
-            recent = memory.get_recent(conversation_id, k=8)
-            if not recent:
-                return query
-            transcript = "\n".join(f"{m['role']}: {m['content']}" for m in recent)
+            # Called BEFORE the current turn is persisted, so the smart context
+            # holds only PRIOR turns. At least one prior exchange is required
+            # for a rewrite to make sense (turn 1 has no history -> no rewrite).
+            # Use "recent + relevant" memory: a follow-up's subject can be
+            # introduced several turns back ("which new markets?" -> the Acme
+            # Analytics expansion discussed earlier), so a recent-only window is
+            # not enough. embed_query is lru-cached, so this adds no LLM cost.
+            q_emb = retrieval.embed_query(query)
+            mem = memory.get_smart_context(conversation_id, q_emb,
+                                           recent_k=8, relevant_k=5)
+            parts = []
+            if mem.get("recent"):
+                parts.append("Recent:\n" + "\n".join(
+                    f"{m['role']}: {m['content']}" for m in mem["recent"]))
+            if mem.get("relevant"):
+                parts.append("Also relevant from earlier:\n" + "\n".join(
+                    f"{m['role']}: {m['content']}" for m in mem["relevant"]))
+            transcript = "\n\n".join(parts)
             if not transcript.strip():
                 return query
             out = (chat_text([

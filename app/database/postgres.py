@@ -111,6 +111,11 @@ def _get_pool():
                         min_size=settings.DB_POOL_MIN_SIZE,
                         max_size=settings.DB_POOL_MAX_SIZE,
                         kwargs={"row_factory": dict_row, "autocommit": True},
+                        # Health-check every checkout (cheap SELECT 1). Without
+                        # this (default check=None) a stale/broken connection can
+                        # be handed out after a restart/idle period and 500 on
+                        # first use (observed: GET /collections + /documents 500).
+                        check=ConnectionPool.check_connection,
                         open=False,
                     )
                     p.open(wait=False)

@@ -250,6 +250,21 @@ def retrieve(query: str, top_k: int | None = None, collection: str | None = None
         t1 = time.perf_counter()  # end of stage-1 (search + fusion + filename)
         pool = fused[: settings.RERANKER_CANDIDATES]
         reranked = rerank.rerank(query, pool, top_k, return_all=True)
+        # Optional rerank-confidence floor: drop candidates the cross-encoder is
+        # not confident about (clear retrieval noise) from the served pool, so the
+        # Writer gets cleaner context. Only when NO candidate meets the floor (a
+        # weak match) do we fall back to the best MIN_KEEP so the Writer still has
+        # something to ground on — never top up with below-floor noise.
+        if settings.RERANK_CONFIDENCE_FLOOR > 0.0:
+            confident = [r for r in reranked if float(r.get("rerank_confidence") or 0.0)
+                         >= settings.RERANK_CONFIDENCE_FLOOR]
+            if not confident:
+                reranked = reranked[: settings.RERANK_CONFIDENCE_MIN_KEEP]
+            else:
+                reranked = confident
+            log.info("🧹 Rerank-confidence floor %.2f: served %d of %d candidates",
+                     settings.RERANK_CONFIDENCE_FLOOR, len(reranked), len(pool))
+        reranked = reranked[:top_k]
         results = list(promoted)
         for row in reranked:
             if row["id"] in seen:
