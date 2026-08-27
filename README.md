@@ -344,7 +344,13 @@ python cli/main.py admin alice --remove           # revoke admin from alice
 # 6. Start MongoDB (users + chat history)
 #    Portable install: extract https://fastdl.mongodb.org/windows/mongodb-windows-x86_64-8.3.8.zip to C:\mongodb
 C:\mongodb\mongodb-win32-x86_64-windows-8.3.8\bin\mongod.exe --dbpath C:\mongodb\data --port 27017 --bind_ip 127.0.0.1
-#    NOTE: mongod is a manual background process (not a service) — start it again after a reboot.
+#    NOTE: the above is a manual background process (not a service) — start it again after a reboot.
+#    Run it as a WINDOWS SERVICE instead (auto-start, survives reboot):
+#      sc.exe create MongoDB binPath= "\"C:\mongodb\mongodb-win32-x86_64-windows-8.3.8\bin\mongod.exe\" --config C:\mongodb\mongod.conf" start= auto
+#      sc.exe start MongoDB
+#    On Linux bare-metal, install the systemd unit instead: deploy/systemd/agentic-rag-mongo.service
+#      sudo cp deploy/systemd/agentic-rag-mongo.service /etc/systemd/system/ && sudo systemctl enable --now agentic-rag-mongo
+#    (Docker Compose manages MongoDB automatically — no manual service needed there.)
 
 # 7. Run the API server
 uvicorn app.main:app --reload --port 8000
@@ -606,6 +612,10 @@ downloads, or model randomness. Integration tests use the real local Postgres
 python -m pytest
 ```
 
+**CI:** the default suite runs automatically on every push/PR via GitHub
+Actions (`.github/workflows/ci.yml`) against Postgres+pgvector and MongoDB
+service containers — it is the merge gate, so a red test blocks the change.
+
 RAG quality evaluation (recall@k + MRR, RAGAS generation metrics, citation
 accuracy, latency) is opt-in and needs real models configured in `.env`:
 
@@ -626,5 +636,9 @@ workflows) · `tests/architecture` (dependency contracts) · `tests/evaluation`
   `MONGO_URI` to any reachable instance. A portable, service-free install works:
   download `mongodb-windows-x86_64-8.3.8.zip`, extract to `C:\mongodb`, and run
   `mongod.exe --dbpath C:\mongodb\data --port 27017 --bind_ip 127.0.0.1` (start it
-  again after every reboot).
+  again after every reboot). For production, run it as a **managed service**
+  instead of a manual process: a Windows service (`sc.exe create MongoDB ...`,
+  see § Quick Start step 6) or the Linux systemd unit
+  `deploy/systemd/agentic-rag-mongo.service`. In Docker Compose, MongoDB is
+  already a managed service (`mongo:8` with `restart: unless-stopped`).
 - API keys for the providers you use (not needed in `mock` mode)

@@ -1,0 +1,30 @@
+# Agentic RAG — MongoDB systemd unit (bare-metal Linux deployments).
+#
+# Docker Compose manages MongoDB for you; use this only when running the app
+# directly on a host. Assumes mongod is installed and configured via
+# /etc/mongod.conf (dbPath, bindIp, port 27017).
+#
+# Install:
+#   sudo cp agentic-rag-mongo.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now agentic-rag-mongo
+[Unit]
+Description=MongoDB (Agentic RAG users, sessions, chat history)
+Documentation=https://www.mongodb.com/docs/manual/
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/mongod --config /etc/mongod.conf
+Restart=always
+RestartSec=3
+# Hardening: drop privileges and deny risky syscalls/paths.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/var/lib/mongodb /var/log/mongodb
+
+[Install]
+WantedBy=multi-user.target
