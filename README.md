@@ -514,9 +514,13 @@ rate limit; enable it behind nginx/Cloudflare). **Web/API:** `CORS_ORIGINS`
 
 **Two-stage retrieval & reranking:** `USE_RERANKER` (1), `RERANKER_MODEL`
 (`Qwen/Qwen3-Reranker-0.6B`), `RERANKER_CANDIDATES` (20), `RERANKER_BATCH_SIZE`
-(32), `RERANKER_MAX_LENGTH` (1024), `RERANKER_INSTRUCTION` (''). The reranker
-model auto-downloads from HuggingFace on first use and runs on **CUDA** when
-torch is GPU-enabled. Sparse: `USE_SPARSE_SEARCH` (1), `SPARSE_DIM` (16000),
+(32), `RERANKER_MAX_LENGTH` (1024), `RERANKER_INSTRUCTION` (''),
+`RERANK_CONFIDENCE_FLOOR` (0.0 = disabled; when > 0, cross-encoder candidates
+below this sigmoid confidence are dropped from the served pool as retrieval
+noise — relevant chunks score ≥ 0.99, so recall is unaffected), and
+`RERANK_CONFIDENCE_MIN_KEEP` (2; minimum chunks served when nothing meets the
+floor). The reranker model auto-downloads from HuggingFace on first use and runs
+on **CUDA** when torch is GPU-enabled. Sparse: `USE_SPARSE_SEARCH` (1), `SPARSE_DIM` (16000),
 `SPARSE_TOP_TERMS` (256). Retrieval cache: `RETRIEVAL_CACHE_ENABLED` (1),
 `RETRIEVAL_CACHE_THRESHOLD` (0.97), `RETRIEVAL_CACHE_MAX_ENTRIES` (500).
 Multi-turn: `USE_QUERY_REWRITE` (1), `QUERY_EXPANSION_VARIANTS` (5).
