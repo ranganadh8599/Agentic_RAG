@@ -1,0 +1,227 @@
+[
+  {
+    "question": "Describe the quarterly revenue chart",
+    "ground_truth": "A bar chart titled 'Acme Analytics Quarterly Revenue' showing quarterly revenue growing from Q1 through Q3.",
+    "relevant_documents": [
+      "chart.png"
+    ]
+  },
+  {
+    "question": "How does RAGAS generate test data?",
+    "ground_truth": "RAGAS supports synthetic testset generation to create evaluation datasets.",
+    "relevant_documents": [
+      "1787568335684.pdf"
+    ]
+  },
+  {
+    "question": "How does two-stage retrieval work?",
+    "ground_truth": "Fast retrieval first finds top-K candidates, then a more powerful model scores and reorders them.",
+    "relevant_documents": [
+      "1787571997958.pdf"
+    ]
+  },
+  {
+    "question": "How many employees does Acme Analytics have?",
+    "ground_truth": "Acme Analytics employs 240 people across offices in San Francisco, Berlin, and Singapore.",
+    "relevant_documents": [
+      "report.pdf"
+    ]
+  },
+  {
+    "question": "In what year was A Gentleman in Moscow published?",
+    "ground_truth": "A Gentleman in Moscow was published in 2017.",
+    "relevant_documents": [
+      "bestsellers-with-categories.xlsx"
+    ]
+  },
+  {
+    "question": "What are autonomous agents?",
+    "ground_truth": "Autonomous agents are AI systems that make decisions and plan actions on their own.",
+    "relevant_documents": [
+      "1787571916067.pdf"
+    ]
+  },
+  {
+    "question": "What are cross-encoders used for in RAG?",
+    "ground_truth": "Cross-encoders score each query-document pair jointly during the reranking stage.",
+    "relevant_documents": [
+      "1787571997958.pdf"
+    ]
+  },
+  {
+    "question": "What are the TODO items for the RAG project?",
+    "ground_truth": "TODOs: try pgvector HNSW indexes for fast search, add a vision model to summarize embedded images, and compare char vs BPE tokenizers from the gpt-from-scratch project.",
+    "relevant_documents": [
+      "notes.txt"
+    ]
+  },
+  {
+    "question": "What chunk size does the AI interview cheat sheet recommend?",
+    "ground_truth": "The cheat sheet recommends 300-800 tokens per chunk for RAG systems.",
+    "relevant_documents": [
+      "1787571334206.pdf",
+      "1787571498520.pdf"
+    ]
+  },
+  {
+    "question": "What does RAGAS cover for end-to-end evaluation?",
+    "ground_truth": "RAGAS covers LLM-as-Judge metrics, synthetic testset generation, LangChain/LlamaIndex integration, and production best practices.",
+    "relevant_documents": [
+      "1787568335684.pdf"
+    ]
+  },
+  {
+    "question": "What feature would summarize embedded images?",
+    "ground_truth": "A vision model to summarize embedded images.",
+    "relevant_documents": [
+      "notes.txt"
+    ]
+  },
+  {
+    "question": "What features should the multi-agent RAG system have?",
+    "ground_truth": "Key features: semantic caching, hybrid retrieval, and grounded citations.",
+    "relevant_documents": [
+      "notes.txt"
+    ]
+  },
+  {
+    "question": "What is Acme's net-zero carbon commitment?",
+    "ground_truth": "Acme Analytics committed to achieving net-zero carbon emissions by 2030 and reduced energy consumption by 18% in 2024.",
+    "relevant_documents": [
+      "report.pdf"
+    ]
+  },
+  {
+    "question": "What is agentic RAG?",
+    "ground_truth": "Agentic RAG embeds autonomous agents into RAG pipelines for dynamic reasoning and retrieval.",
+    "relevant_documents": [
+      "1787571916067.pdf"
+    ]
+  },
+  {
+    "question": "What is LLM-as-a-judge in RAG evaluation?",
+    "ground_truth": "LLM-as-a-judge uses a language model to score retrieval and generation quality, one of the RAGAS evaluation concepts.",
+    "relevant_documents": [
+      "1787568335684.pdf"
+    ]
+  },
+  {
+    "question": "What is planning in agentic RAG?",
+    "ground_truth": "Planning in agentic RAG means breaking complex tasks into smaller steps.",
+    "relevant_documents": [
+      "1787571916067.pdf"
+    ]
+  },
+  {
+    "question": "What is reranking in RAG?",
+    "ground_truth": "Reranking is an additional stage between retrieval and augmentation that reorders retrieved documents to prioritize the most relevant ones.",
+    "relevant_documents": [
+      "1787571997958.pdf"
+    ]
+  },
+  {
+    "question": "What is the price of 1984?",
+    "ground_truth": "1984 has a price of 6 in the bestsellers data.",
+    "relevant_documents": [
+      "bestsellers-with-categories.xlsx"
+    ]
+  },
+  {
+    "question": "What is the project idea described in the notes?",
+    "ground_truth": "A multi-agent RAG system that reads PDFs and images, stores everything in PostgreSQL, and supports OpenAI, Gemini, and Claude with semantic caching, hybrid retrieval, and grounded citations.",
+    "relevant_documents": [
+      "notes.txt"
+    ]
+  },
+  {
+    "question": "What is the reliability math example in the 2026 agentic AI interview guide?",
+    "ground_truth": "An agent that is 95% reliable per step succeeds only 36% of the time after 20 steps.",
+    "relevant_documents": [
+      "1787571803974.pdf"
+    ]
+  },
+  {
+    "question": "What is the revenue breakdown by product?",
+    "ground_truth": "Revenue breakdown: AcmeInsight subscriptions $1,600,000, consulting services $600,000, and licenses $200,000.",
+    "relevant_documents": [
+      "report.pdf"
+    ]
+  },
+  {
+    "question": "What is the scientific README template used for?",
+    "ground_truth": "It is a template for describing a scientific or data analysis project, its goals, data, and contacts.",
+    "relevant_documents": [
+      "Scientific-Readme-Template.md"
+    ]
+  },
+  {
+    "question": "What is the user rating of 12 Rules for Life?",
+    "ground_truth": "12 Rules for Life by Jordan B. Peterson has a user rating of 4.7.",
+    "relevant_documents": [
+      "bestsellers-with-categories.xlsx"
+    ]
+  },
+  {
+    "question": "What should the template describe under the Data section?",
+    "ground_truth": "The dataset, how it was obtained, and other important details, including a data contact and an expiration date.",
+    "relevant_documents": [
+      "Scientific-Readme-Template.md"
+    ]
+  },
+  {
+    "question": "What was Acme Analytics total revenue in 2024?",
+    "ground_truth": "Acme Analytics reported total revenue of $2,400,000 in 2024, an increase of 35% compared to 2023.",
+    "relevant_documents": [
+      "report.pdf"
+    ]
+  },
+  {
+    "question": "Which AI providers should the RAG system support?",
+    "ground_truth": "OpenAI, Gemini, and Claude.",
+    "relevant_documents": [
+      "notes.txt"
+    ]
+  },
+  {
+    "question": "Which index type should be tried for fast search?",
+    "ground_truth": "pgvector HNSW indexes for fast search.",
+    "relevant_documents": [
+      "notes.txt"
+    ]
+  },
+  {
+    "question": "Which LLM providers should the RAG support?",
+    "ground_truth": "The RAG system should support OpenAI, Gemini, and Claude.",
+    "relevant_documents": [
+      "notes.txt"
+    ]
+  },
+  {
+    "question": "Which new markets did Acme Analytics expand into?",
+    "ground_truth": "Acme Analytics expanded into three new markets in 2024: Germany, Japan, and Brazil.",
+    "relevant_documents": [
+      "report.pdf"
+    ]
+  },
+  {
+    "question": "Who is the CTO of Acme Analytics?",
+    "ground_truth": "The CTO of Acme Analytics is Dr. Maria Chen, who leads a team of 60 engineers.",
+    "relevant_documents": [
+      "report.pdf"
+    ]
+  },
+  {
+    "question": "Who is the data contact in the README template?",
+    "ground_truth": "Daniel E. Cook is listed as the data contact.",
+    "relevant_documents": [
+      "Scientific-Readme-Template.md"
+    ]
+  },
+  {
+    "question": "Who is the data contact listed in the readme template?",
+    "ground_truth": "Daniel E. Cook.",
+    "relevant_documents": [
+      "Scientific-Readme-Template.md"
+    ]
+  }
+]

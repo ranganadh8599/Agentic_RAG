@@ -130,7 +130,7 @@ Everything is provider-agnostic: all LLM and embedding calls go through
   `rerank_confidence` in [0,1]. `USE_RERANKER=0` disables the rerank stage.
 - **BM25-style sparse search** — exact-term retrieval that catches names, codes
   and acronyms embeddings miss (`SPARSE_DIM`, `SPARSE_TOP_TERMS`); auto-enabled
-  on pgvector ≥ 0.7 (`USE_SPARSE_SEARCH`, rebuild with `cli.py rebuild-sparse`).
+  on pgvector ≥ 0.7 (`USE_SPARSE_SEARCH`, rebuild with `cli/main.py rebuild-sparse`).
 - **Retrieval-results cache** — popular queries reuse their cached reranked
   chunk list, skipping search + rerank entirely (`RETRIEVAL_CACHE_ENABLED`,
   `RETRIEVAL_CACHE_THRESHOLD` 0.97, `RETRIEVAL_CACHE_MAX_ENTRIES` 500).
@@ -145,7 +145,7 @@ Everything is provider-agnostic: all LLM and embedding calls go through
   bucket **plus the global (admin) cache** but **writes only to their own**. The
   global bucket never stores results that touch a private document, so a user
   reading the admin cache can never leak another user's files. Grant admin with
-  `cli.py admin <username>` (revoke with `--remove`).
+  `cli/main.py admin <username>` (revoke with `--remove`).
 - **Hybrid retrieval** — vector search + Postgres full-text keyword search,
   **LLM query expansion**, and **reciprocal-rank fusion**.
 - **Semantic cache** — repeated queries answered instantly when a semantically
@@ -179,15 +179,86 @@ Everything is provider-agnostic: all LLM and embedding calls go through
 - **Noise-free** — litellm / huggingface / transformers logs are suppressed so
   only your pipeline shows.
 
-### 📊 Evaluation & quality
+### 📊 Evaluation & quality (opt-in, real models)
 
-- **`eval_ragas.py`** — end-to-end **RAGAS** evaluation (faithfulness, answer
-  relevancy, context precision/recall, plus custom citation-integrity & answer-
-  accuracy metrics) against judged datasets.
-- **`recall_check.py`** — **recall@k + MRR** regression harness ("recall is the
-  north star"); exits non-zero below `--min-recall`.
-- **`benchmark_rerank.py`** — candidate-pool latency/quality sweep + FTS A/B
-  (`--ab fts`) with recall@k/MRR.
+RAG-quality evaluation is kept separate from the correctness suite and run on
+demand with real models:
+
+- **RAGAS generation metrics** — faithfulness, answer relevancy, context
+  precision/recall scored over `tests/evaluation/datasets/rag_eval.json`
+  (`tests/evaluation/generation/`).
+- **Retrieval recall@k + MRR** — the "north star" regression harness with a
+  quality floor (`tests/evaluation/retrieval/`).
+- **Citation accuracy** — `tests/evaluation/citations/`.
+- **Latency benchmarks** — P50/P95 per query + stage breakdown
+  (`tests/evaluation/benchmarks/`).
+
+Run all of them with:
+
+```powershell
+python -m pytest -m evaluation
+```
+
+(Requires real `EMBEDDING_MODEL` / `LLM_MODEL` in `.env` and the corpus
+ingested. Deeper one-off runs — candidate-pool sweeps, FTS A/B, judged dataset
+recalls — use the local-only dev scripts `benchmark_rerank.py`,
+`recall_check.py`, and `eval_ragas.py`; these are kept out of version control.)
+
+### 📈 Measured results — RAG quality experiment (2026-08)
+
+Real numbers captured on this repo's own corpus against the golden set in
+`tests/evaluation/datasets/rag_eval.json` (**32 judged questions across 10
+documents**). Environment: `gemini-embedding-2` (3072-d) + `gemini-2.5-flash`,
+`Qwen3-Reranker-0.6B` on a **GTX 1650 Ti** (CUDA), sparse channel unavailable
+(`SPARSE_READY=False` — pgvector < 0.7). The ablation is reproducible:
+
+```powershell
+python -m pytest -m evaluation -k ablation
+```
+
+**Retrieval ablation** — same 32 questions per config, `top_k=10`, caches
+bypassed. (Hybrid configs include 5-query LLM expansion — the FTS channel runs
+on expansion variants.)
+
+| config | Recall@1 | Recall@5 | Recall@10 | MRR | P50 ms |
+|---|---|---|---|---|---|
+| Dense | 0.938 | 0.969 | 0.969 | 0.953 | 27 |
+| Dense + Reranker | 0.938 | 0.938 | 0.969 | 0.941 | 11,420 |
+| Hybrid + RRF | 0.906 | 0.938 | 0.969 | 0.918 | 6,624 |
+| Hybrid + RRF + Reranker | 0.938 | 0.938 | 0.969 | 0.941 | 14,023 |
+
+*Reading:* on this golden set **dense-only is the best cost/recall trade-off**
+(R@5 0.969, MRR 0.953, 27 ms). Hybrid/rerank add 6–14 s/query on this GPU
+without a recall gain — hybrid exists to rescue exact-term / long-tail recall
+on harder corpora, not needed on this easy, dense-friendly set.
+
+**Latency** (10 queries, full pipeline incl. rerank):
+
+| | P50 | P95 |
+|---|---|---|
+| cache miss (cold) | ~11.2 s | ~30.6 s |
+| retrieval-cache hit (same query) | ~0.05 s | — |
+
+**Generation — RAGAS classic metrics** (8-question sample, `n_generations=1`,
+dense retrieval):
+
+| metric | Writer | Writer + Critic |
+|---|---|---|
+| faithfulness | 0.900 | 0.900 |
+| answer_relevancy | 0.836 | 0.852 |
+| context_precision | 0.833 | 0.830 |
+| context_recall | 0.875 | 0.875 |
+| citation_precision | 0.854 | 0.812 |
+| citation_recall | 0.875 | 0.750 |
+
+*Caveat:* this run **surfaced a real bug** — Gemini wraps/truncates the Critic's
+JSON, so the fail-closed Critic was unavailable on half the calls during the
+sample and no significant Writer+Critic difference was measurable. That bug was
+fixed afterwards (`_parse_critic_json` strips code fences + extracts the object,
+`CRITIC_MAX_TOKENS` 300→600; verified 4/5 real calls) — a follow-up run is the
+next step.
+
+**Citation accuracy** (deterministic sanitizer): **100%** (4/4 samples).
 
 ### 🧠 Multi-agent & citation integrity
 
@@ -254,21 +325,21 @@ pip install -r requirements.txt
 #      OPENAI_API_KEY=sk-...
 
 # 3. Ingest documents
-python cli.py ingest C:\path\to\a.pdf
-python cli.py ingest C:\path\to\folder_of_docs     # whole directory
-python cli.py ingest C:\path\to\a.pdf --collection hr   # into the 'hr' table
+python cli/main.py ingest C:\path\to\a.pdf
+python cli/main.py ingest C:\path\to\folder_of_docs     # whole directory
+python cli/main.py ingest C:\path\to\a.pdf --collection hr   # into the 'hr' table
 
 # 4. Ask questions
-python cli.py ask "What is the revenue mentioned in the report?"
-python cli.py ask "..." --collection hr                  # search only the 'hr' table
-python cli.py chat                                        # interactive chat
+python cli/main.py ask "What is the revenue mentioned in the report?"
+python cli/main.py ask "..." --collection hr                  # search only the 'hr' table
+python cli/main.py chat                                        # interactive chat
 
 # 5. Roles — how a user becomes admin
 #    Admin:        sees the shared corpus (admin/CLI uploads), global cache.
 #    Normal user:  sees the shared corpus + their own uploads, own cache.
 #    New users are normal by default; promote/revoke with:
-python cli.py admin alice                    # grant admin to alice
-python cli.py admin alice --remove           # revoke admin from alice
+python cli/main.py admin alice                    # grant admin to alice
+python cli/main.py admin alice --remove           # revoke admin from alice
 
 # 6. Start MongoDB (users + chat history)
 #    Portable install: extract https://fastdl.mongodb.org/windows/mongodb-windows-x86_64-8.3.8.zip to C:\mongodb
@@ -276,7 +347,7 @@ C:\mongodb\mongodb-win32-x86_64-windows-8.3.8\bin\mongod.exe --dbpath C:\mongodb
 #    NOTE: mongod is a manual background process (not a service) — start it again after a reboot.
 
 # 7. Run the API server
-uvicorn api:app --reload --port 8000
+uvicorn app.main:app --reload --port 8000
 curl -X POST http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"messages":[{"role":"user","content":"Summarize the PDF"}],"stream":true}'
@@ -329,8 +400,8 @@ Volumes keep your data: `pgdata` (Postgres), `mongodata` (Mongo), `hf-cache`
 
 ### CLI inside the container
 ```bash
-docker compose exec app python cli.py admin alice                 # promote a user
-docker compose exec app python cli.py ingest /app/fixtures/notes.txt
+docker compose exec app python cli/main.py admin alice                 # promote a user
+docker compose exec app python cli/main.py ingest /app/fixtures/notes.txt
 ```
 
 ## Web UI
@@ -411,7 +482,7 @@ for previously ingested files.
 
 ## Configuration (.env)
 
-All tunables live in `config.py` and are loaded from environment variables
+All tunables live in `app/core/config.py` and are loaded from environment variables
 (see `.env.example` for the full annotated list). Core knobs: `EMBEDDING_MODEL`,
 `LLM_MODEL`, `VISION_MODEL`, `USE_ASYMMETRIC_PREFIX`, `CHUNK_SIZE`, `CHUNK_OVERLAP`,
 `TOP_K`, `USE_QUERY_EXPANSION`, `SEMANTIC_CACHE_THRESHOLD`, `RELEVANCE_FLOOR`,
@@ -433,15 +504,23 @@ Also configurable (defaults shown): `MAX_CRITIC_ROUNDS` (2), `ROUTER_MAX_TOKENS`
 query (falls back to per-call connections if the package is missing).
 **Auth rate limiting:** `AUTH_RATE_LIMIT` (10) login/register attempts per
 `AUTH_RATE_WINDOW` (60) seconds per client IP → `429` (per-process counter, so
-`N` workers = `N×` the limit). **Web/API:** `CORS_ORIGINS` (`*`, comma-separated;
-bearer auth keeps cookies off, so `*` is acceptable) and `PAGE_LIMIT_CAP`
-(1000) — the hard cap on `?limit=` for list endpoints.
+`N` workers = `N×` the limit). **Auth hardening:** `AUTH_MIN_PASSWORD_LEN` (8),
+`PBKDF2_ITERATIONS` (600000 — work factor for password hashing; lower in tests
+for speed), and `TRUST_PROXY_HEADERS` (0 — only honor `X-Forwarded-For` when
+behind a trusted reverse proxy, so a client can't spoof its IP to bypass the
+rate limit; enable it behind nginx/Cloudflare). **Web/API:** `CORS_ORIGINS`
+(`*`, comma-separated; bearer auth keeps cookies off, so `*` is acceptable) and
+`PAGE_LIMIT_CAP` (1000) — the hard cap on `?limit=` for list endpoints.
 
 **Two-stage retrieval & reranking:** `USE_RERANKER` (1), `RERANKER_MODEL`
 (`Qwen/Qwen3-Reranker-0.6B`), `RERANKER_CANDIDATES` (20), `RERANKER_BATCH_SIZE`
-(32), `RERANKER_MAX_LENGTH` (1024), `RERANKER_INSTRUCTION` (''). The reranker
-model auto-downloads from HuggingFace on first use and runs on **CUDA** when
-torch is GPU-enabled. Sparse: `USE_SPARSE_SEARCH` (1), `SPARSE_DIM` (16000),
+(32), `RERANKER_MAX_LENGTH` (1024), `RERANKER_INSTRUCTION` (''),
+`RERANK_CONFIDENCE_FLOOR` (0.0 = disabled; when > 0, cross-encoder candidates
+below this sigmoid confidence are dropped from the served pool as retrieval
+noise — relevant chunks score ≥ 0.99, so recall is unaffected), and
+`RERANK_CONFIDENCE_MIN_KEEP` (2; minimum chunks served when nothing meets the
+floor). The reranker model auto-downloads from HuggingFace on first use and runs
+on **CUDA** when torch is GPU-enabled. Sparse: `USE_SPARSE_SEARCH` (1), `SPARSE_DIM` (16000),
 `SPARSE_TOP_TERMS` (256). Retrieval cache: `RETRIEVAL_CACHE_ENABLED` (1),
 `RETRIEVAL_CACHE_THRESHOLD` (0.97), `RETRIEVAL_CACHE_MAX_ENTRIES` (500).
 Multi-turn: `USE_QUERY_REWRITE` (1), `QUERY_EXPANSION_VARIANTS` (5).
@@ -473,46 +552,71 @@ live per-file progress. The UI reads these from `GET /api/config`.
 
 ```
 agentic-rag/
-├── config.py      # env-driven settings
-├── db.py          # Postgres + pgvector schema and vector helpers
-├── mongo.py       # MongoDB users, sessions, conversations, messages
-├── llm.py         # unified multi-provider LLM + embeddings (with mock)
-├── chunking.py    # CJK-safe recursive chunker
-├── loaders.py     # PDF / image (vision) / text loaders
-├── ingest.py      # ingestion pipeline
-├── rerank.py      # cross-encoder reranker (two-stage retrieval, GPU-aware)
-├── sparse.py      # BM25-style sparse search (exact names/codes/acronyms)
-├── retrieval.py   # hybrid retrieval + semantic/retrieval caches + RRF + rerank
-├── logging_config.py  # central logging (console + date/time log files + tables)
-├── memory.py      # conversation memory (recent + relevant)
-├── agents.py      # Router / Retriever / Writer / Critic / Orchestrator
-├── prompts.py     # agent prompts
-├── api.py         # FastAPI server (OpenAI-compatible) + real auth
-├── cli.py         # ingest / ask / chat / stats / admin / reset
-├── eval_ragas.py  # RAGAS end-to-end evaluation (faithfulness, relevancy, ...)
-├── recall_check.py  # recall@k + MRR regression harness
-├── benchmark_rerank.py  # rerank candidate-pool benchmark + FTS A/B
+├── app/            # application package
+│   ├── main.py         # FastAPI app entry point (uvicorn app.main:app)
+│   ├── api/            # FastAPI routers + dependencies
+│   │   ├── routes_health.py        # /health, /api/config
+│   │   ├── routes_documents.py     # /documents, /images, /ingest
+│   │   ├── routes_collections.py   # /collections
+│   │   ├── routes_auth.py          # register / login / logout / me / password
+│   │   ├── routes_conversations.py # chat history (ownership enforced)
+│   │   ├── routes_chat.py          # OpenAI-compatible /v1/chat/completions
+│   │   └── dependencies.py         # bearer token, auth rate limit, pagination
+│   ├── agents/       # Router / Retriever / Writer / Critic / Orchestrator
+│   ├── retrieval/    # hybrid retrieval + caches + RRF + rerank
+│   │   ├── hybrid.py, dense.py, sparse.py, reranker.py, fusion.py,
+│   │   └── query_rewriter.py, cache.py, filters.py
+│   ├── ingestion/    # pipeline, loaders, chunking
+│   ├── llm/          # client, embeddings, prompts
+│   ├── database/     # postgres.py (Postgres + pgvector) + mongo.py
+│   ├── memory/       # conversation memory
+│   ├── citation/     # validator / sanitizer / formatter
+│   ├── core/         # config, logging
+│   └── schemas/      # chat / users request models
+├── cli/
+│   └── main.py    # ingest / ask / chat / stats / admin / reset
+├── tests/
+│   ├── unit/         # component correctness (mock LLM/embeddings)
+│   │   └── api/      # HTTP behavior (FastAPI TestClient)
+│   ├── integration/  # real Postgres + FTS component interaction
+│   ├── e2e/          # user workflows (upload → ask, multi-turn, isolation)
+│   ├── architecture/ # dependency-contract tests
+│   └── evaluation/   # opt-in RAG quality (retrieval / generation / citations / benchmarks)
 ├── static/        # web UI (HTML / CSS / JS — Markdown-rendered chat)
-└── screenshots/   # UI screenshots used in this README
+├── screenshots/   # UI screenshots used in this README
+├── Dockerfile
+├── docker-compose.yml
+├── docker-compose.gpu.yml
+├── requirements.txt
+├── pyproject.toml   # pytest configuration
+└── .env.example
 ```
 
 ## Testing
 
-Run the end-to-end edge-case suite (needs the API server running on port 8000):
+### Pytest suite (primary)
+
+A hermetic pytest suite covering unit, API, integration, e2e, and
+architecture-contract tests. The default run uses mock LLM/embeddings and
+deterministic retrieval, so it is fast (~11s) and needs no API keys, model
+downloads, or model randomness. Integration tests use the real local Postgres
+(plus the real FTS channel):
 
 ```powershell
-& .\.venv\Scripts\python.exe tests\e2e_test.py
+python -m pytest
 ```
 
-87 cases across 11 sections: **A** query/answer ground truth + citation
-integrity + greeting routing (greetings skip RAG; greeting+question still RAG),
-**B** collection isolation, **C** ingestion edge cases, **D** API robustness,
-**E** registration & login, **F** session validation, **G** auth'd chat &
-conversation scoping (incl. sources persisted with each assistant message),
-**H** cross-user history isolation (403/404/delete), **I** conversation memory
-persistence (multi-turn), **J** password change & logout, **K** health/Mongo
-integration. It exits non-zero on any failure, so it works as a pre-commit gate
-before shipping new features.
+RAG quality evaluation (recall@k + MRR, RAGAS generation metrics, citation
+accuracy, latency) is opt-in and needs real models configured in `.env`:
+
+```powershell
+python -m pytest -m evaluation
+```
+
+Structure: `tests/unit` (component correctness) · `tests/unit/api` (HTTP) ·
+`tests/integration` (real DB/component interaction) · `tests/e2e` (user
+workflows) · `tests/architecture` (dependency contracts) · `tests/evaluation`
+(retrieval / generation / citations / benchmarks, opt-in).
 
 ## Requirements
 

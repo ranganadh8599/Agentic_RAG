@@ -1,0 +1,17 @@
+# Agentic RAG - project metadata & tool configuration.
+# (Python packaging is not set up yet; this file currently only configures
+# pytest so it can import the `app` package and scope collection to tests/.)
+
+[tool.pytest.ini_options]
+# Make the repo root importable so `import app...` / `import cli...` work.
+pythonpath = ["."]
+# Only collect tests under tests/ (root test_*.py are standalone dev scripts).
+testpaths = ["tests"]
+# Only collect files named test_*.py.
+python_files = ["test_*.py"]
+# Keep the default suite fast/hermetic; RAG evaluation needs real models and
+# is opt-in via `pytest -m evaluation`.
+addopts = "-m 'not evaluation' -q"
+markers = [
+    "evaluation: RAG quality evaluation (requires real models; run `pytest -m evaluation`)",
+]

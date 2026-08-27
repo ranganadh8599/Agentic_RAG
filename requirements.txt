@@ -48,3 +48,5 @@ fsspec<=2026.6.0
 # --- Optional dev-only tools (not required by the server) ---
 # make_fixtures.py fixture generator
 reportlab>=4.0
+# Test runner for the tests/ suite (run: python -m pytest)
+pytest>=8.0
