@@ -106,8 +106,10 @@ class Settings:
 
     # --- Uploads (size / count) ---
     # Max size of a single uploaded file in MB (0 = unlimited). Enforced
-    # server-side (413) and pre-checked in the UI.
-    MAX_UPLOAD_MB: int = int(os.getenv("MAX_UPLOAD_MB", "0"))
+    # server-side (413) and pre-checked in the UI. Default 50 MB: an unbounded
+    # default would let one request read arbitrarily large bodies into memory
+    # (DoS); raise it or set 0 only when the deployment is trusted.
+    MAX_UPLOAD_MB: int = int(os.getenv("MAX_UPLOAD_MB", "50"))
     # Max files accepted per upload batch/selection (0 = unlimited). Enforced
     # in the UI (extra files are skipped with a notice).
     MAX_UPLOAD_FILES: int = int(os.getenv("MAX_UPLOAD_FILES", "0"))

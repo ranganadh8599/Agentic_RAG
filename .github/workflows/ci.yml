@@ -1,0 +1,63 @@
+# Agentic RAG — CI: run the hermetic pytest suite on every push/PR.
+#
+# The default suite (180 tests, `-m "not evaluation"`) is fully hermetic: mock
+# LLM/embeddings (set in tests/conftest.py before config loads), so no API keys
+# are needed. It does need PostgreSQL + pgvector (db_ready fixture) and MongoDB
+# (some API tests touch users/conversations), both provided as service
+# containers below. RAG evaluation (`pytest -m evaluation`) requires real
+# models + an ingested corpus, so it stays out of CI.
+name: CI
+
+on:
+  push:
+    branches: [main, version_1.0.2]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: agentic_rag
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d agentic_rag"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      mongo:
+        image: mongo:8
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.adminCommand(\"ping\").ok'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      # Match the service containers above (same defaults as app/core/config.py).
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/agentic_rag
+      MONGO_URI: mongodb://127.0.0.1:27017
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: "pip"
+
+      # CPU torch first (keeps the build small; mirrors the Dockerfile) so the
+      # later `pip install -r requirements.txt` doesn't pull CUDA wheels.
+      - name: Install torch (CPU)
+        run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run hermetic test suite
+        run: python -m pytest

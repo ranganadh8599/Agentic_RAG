@@ -9,6 +9,7 @@
 
 import hashlib
 import hmac
+import logging
 import os
 import secrets
 from datetime import datetime, timedelta, timezone
@@ -18,6 +19,8 @@ from pymongo import MongoClient, ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
 from app.core.config import settings
+
+log = logging.getLogger("mongo")
 
 _client = MongoClient(settings.MONGO_URI, serverSelectionTimeoutMS=2000)
 _db = _client[settings.MONGO_DB]
@@ -35,8 +38,8 @@ def init_db():
         _sessions.create_index([("expires_at", 1)], expireAfterSeconds=0)
         _conversations.create_index([("user_id", 1), ("created_at", -1)])
         _messages.create_index([("conversation_id", 1), ("_id", 1)])
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as exc:  # noqa: BLE001 — auth indexes (unique user/token, session TTL)
+        log.warning("Mongo init_db failed (auth indexes may be missing): %s", exc)
 
 
 def _now():
@@ -132,10 +135,11 @@ def change_password(user_id: str, current_password: str, new_password: str,
                 _sessions.delete_many({"user_id": user_id, "token": {"$ne": keep_token}})
             else:
                 _sessions.delete_many({"user_id": user_id})
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001 — failing to revoke sessions weakens password changes
+            log.warning("password-change session revocation failed: %s", exc)
         return {"ok": True}
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
+        log.warning("change_password failed: %s", exc)
         return {"ok": False, "error": "could not change password"}
 
 
@@ -143,8 +147,8 @@ def logout(token: str | None):
     if token:
         try:
             _sessions.delete_many({"token": token})
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001
+            log.warning("logout failed to revoke session token: %s", exc)
 
 
 def user_from_token(token: str | None):
@@ -160,7 +164,8 @@ def user_from_token(token: str | None):
         return {"id": str(user["_id"]), "username": user["username"],
                 "display_name": user["display_name"],
                 "is_admin": bool(user.get("is_admin"))}
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 — never fail open on a token lookup error
+        log.warning("session/token lookup failed: %s", exc)
         return None
 
 

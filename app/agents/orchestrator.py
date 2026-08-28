@@ -238,7 +238,10 @@ class OrchestratorAgent:
                       sources, result.get("collection_id"), user_id,
                       filters=result.get("filters"),
                       shared_safe=result.get("shared_safe", True))
-        log.info("📝 Generated answer (%d chars):\n%s", len(answer or ""), answer or "")
+        # Never log the full answer: it is derived from user documents and may
+        # contain sensitive data (OWASP [119] — no sensitive info in logs).
+        log.info("📝 Generated answer (%d chars):\n%s", len(answer or ""),
+                 (answer or "")[:300])
         if sources:
             log.info("📚 Cited sources:\n%s", fmt_table(
                 ["cit", "title", "page", "conf", "snippet"],
@@ -249,6 +252,7 @@ class OrchestratorAgent:
                  len(answer or ""), len(sources or []), time.perf_counter() - _t0)
         return {"answer": answer, "sources": sources, "type": kind,
                 "unverified": unverified}
+
 
     # -- streaming --------------------------------------------------------------
 
@@ -351,7 +355,10 @@ class OrchestratorAgent:
                       sources, result.get("collection_id"), user_id,
                       filters=result.get("filters"),
                       shared_safe=result.get("shared_safe", True))
-        log.info("📝 Generated answer (%d chars):\n%s", len(answer or ""), answer or "")
+        # Never log the full answer: it is derived from user documents and may
+        # contain sensitive data (OWASP [119] — no sensitive info in logs).
+        log.info("📝 Generated answer (%d chars):\n%s", len(answer or ""),
+                 (answer or "")[:300])
         if sources:
             log.info("📚 Cited sources:\n%s", fmt_table(
                 ["cit", "title", "page", "conf", "snippet"],

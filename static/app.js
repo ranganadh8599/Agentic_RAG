@@ -53,6 +53,24 @@ function markdownHtml(text) {
   let html;
   if (window.marked && window.marked.parse) {
     try {
+      // Answers originate from LLM output / user documents => UNTRUSTED.
+      // `marked` does NOT sanitize by default, so without these renderer
+      // overrides a document containing <img onerror=...> or [x](javascript:...)
+      // would become stored XSS when the answer is rendered via innerHTML.
+      // Escape raw HTML and reject non-http(s)/mailto/#/relative link schemes.
+      if (window.marked.use) {
+        window.marked.use({
+          renderer: {
+            html: ({ text: t }) => escapeHtml(t || ""),
+            link: ({ href, title, text: t }) => {
+              const safeHref = /^(https?:|mailto:|#|\/)/i.test(href || "") ? href : "#";
+              const label = escapeHtml(t || href || "");
+              const tt = title ? ` title="${escapeHtml(title)}"` : "";
+              return `<a href="${escapeHtml(safeHref)}" target="_blank" rel="noopener noreferrer"${tt}>${label}</a>`;
+            },
+          },
+        });
+      }
       html = window.marked.parse(text, { gfm: true, breaks: true, async: false });
     } catch (e) {
       html = null;

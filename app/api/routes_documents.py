@@ -17,27 +17,50 @@ from app.core.config import settings
 router = APIRouter()
 
 
+def _visibility(user) -> tuple[list[str], list]:
+    """SQL visibility clauses that mirror chat retrieval scoping.
+
+    Anonymous / admin -> shared corpus only (ownerless docs ingested by an
+                         admin/CLI: user_id IS NULL AND ingested_by IS NOT NULL).
+    Regular user      -> shared corpus OR their own uploads.
+    A user's private documents are NEVER visible to anonymous callers.
+
+    Returns a single grouped clause (shared OR own) plus params, so callers can
+    safely AND it with additional filters (collection, image id, ...)."""
+    parts = ["(d.user_id IS NULL AND d.ingested_by IS NOT NULL)"]
+    params: list = []
+    if user and not user.get("is_admin"):
+        parts.append("d.user_id = %s")
+        params.append(user["id"])
+    return [("(" + " OR ".join(parts) + ")")], params
+
+
 @router.get("/documents")
-def documents(collection: str | None = None,
+def documents(request: Request, collection: str | None = None,
               limit: int | None = Query(None, ge=1),
               offset: int | None = Query(None, ge=0)):
-    """List ingested documents with chunk counts (for the UI sidebar).
-    Optionally filter to a single collection and paginate with limit/offset."""
-    coll_filter = ""
-    params: list = []
+    """List documents visible to the caller, with chunk counts.
+
+    Visibility mirrors chat retrieval (see _visibility): a logged-in regular
+    user sees the shared corpus + their own uploads; anonymous/admin see the
+    shared corpus only. A user's private uploads never leak to other users or
+    anonymous callers via this listing.
+    """
+    user = mongo.user_from_token(bearer_token(request))
+    where, params = _visibility(user)
     if collection:
         cid = db.get_collection_id(collection)
         if cid is None:
             return []
-        coll_filter = "WHERE d.collection_id = %s"
-        params = [cid]
+        where.append("d.collection_id = %s")
+        params.append(cid)
     page_limit, page_offset = page_params(limit, offset)
     sql = f"""SELECT d.id, d.title, d.source_type, d.source_path, d.created_at,
                     c2.name AS collection, count(c.id) AS chunks
              FROM documents d
              LEFT JOIN chunks c ON c.document_id = d.id
              LEFT JOIN collections c2 ON c2.id = d.collection_id
-             {coll_filter}
+             WHERE {' AND '.join(where)}
              GROUP BY d.id, c2.name ORDER BY d.id DESC"""
     if page_limit is not None:
         sql += " LIMIT %s OFFSET %s"
@@ -48,10 +71,18 @@ def documents(collection: str | None = None,
 
 
 @router.get("/images/{image_id}")
-def get_image(image_id: int):
-    """Serve a stored image by id (used by the UI to show source images)."""
+def get_image(image_id: int, request: Request):
+    """Serve a stored image by id — only if the owning document is visible to
+    the caller (same scoping as /documents). Prevents IDOR on image ids."""
+    user = mongo.user_from_token(bearer_token(request))
+    where, vis_params = _visibility(user)
     with db.get_conn().cursor() as cur:
-        cur.execute("SELECT data, mime_type FROM images WHERE id = %s", (image_id,))
+        cur.execute(
+            f"""SELECT i.data, i.mime_type
+                FROM images i JOIN documents d ON d.id = i.document_id
+                WHERE i.id = %s AND ({' AND '.join(where)})""",
+            (image_id, *vis_params),
+        )
         row = cur.fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Image not found")

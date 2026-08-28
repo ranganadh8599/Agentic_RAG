@@ -58,6 +58,33 @@ if _cors_origins:
         allow_credentials=False,
     )
 
+
+@app.middleware("http")
+async def security_headers(request, call_next):
+    """Set hardening headers on every response (OWASP System Configuration).
+
+    The Content-Security-Policy is the main XSS defense-in-depth: it keeps the
+    marked CDN script but blocks inline scripts, and forbids object/embed/frame
+    embedding. script-src is restricted to self + the marked CDN."""
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; "
+        "script-src 'self' https://cdn.jsdelivr.net; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data:; "
+        "connect-src 'self'; "
+        "font-src 'self'; "
+        "object-src 'none'; "
+        "base-uri 'self'; "
+        "frame-ancestors 'none'; "
+        "form-action 'self'"
+    )
+    return response
+
 # Serve the web UI (static/ sits at the repository root, one level up from
 # this package).
 STATIC_DIR = os.path.normpath(
